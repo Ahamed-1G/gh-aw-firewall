@@ -177,4 +177,6 @@ describe('docker-manager (barrel re-exports)', () => {
       expect(dockerManager.filterCapDrop([], null)).toEqual([]);
     });
   });
+
+
 });
