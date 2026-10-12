@@ -21,6 +21,8 @@ engine:
   id: copilot
 sandbox:
   agent:
+    # Keep this aligned with both AWF_RELEASE_TAG values below when upgrading gh-aw/AWF.
+    version: v0.28.51
     runtime: nvx
     nvx:
       preview: true
@@ -31,8 +33,8 @@ sandbox:
       openvmm-path: ${{ runner.temp }}/nvx-attested-artifacts/openvmm
       kernel-path: ${{ runner.temp }}/nvx-attested-artifacts/vmlinux
       initramfs-path: ${{ runner.temp }}/nvx-attested-artifacts/initramfs.cpio.gz
-      artifact-manifest-path: ${{ runner.temp }}/nvx-attested-artifacts/manifest.json
-      artifact-manifest-bundle-path: ${{ runner.temp }}/nvx-attested-artifacts/manifest.sigstore.jsonl
+      artifact-manifest-path: ${{ runner.temp }}/nvx-attested-artifacts/nvx-test-x86_64.manifest.json
+      artifact-manifest-bundle-path: ${{ runner.temp }}/nvx-attested-artifacts/nvx-test-x86_64.manifest.sigstore.jsonl
       signer-workflow: github/gh-aw-firewall/.github/workflows/smoke-nvx-build-test.lock.yml
       memory-mib: 4096
       memory-max-bytes: 4294967296
@@ -69,6 +71,8 @@ jobs:
     name: Build workflow-attested NVX artifacts
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      AWF_RELEASE_TAG: v0.28.51
     permissions:
       contents: read
       id-token: write
@@ -103,9 +107,8 @@ jobs:
           install -m 0444 "$extracted/guest/vmlinux" "$artifact_dir/vmlinux"
           install -m 0444 "$extracted/guest/initramfs.cpio.gz" \
             "$artifact_dir/initramfs.cpio.gz"
-          release_tag="v$(node -p "require('./package.json').version")"
           jq -n \
-            --arg release_tag "$release_tag" \
+            --arg release_tag "$AWF_RELEASE_TAG" \
             --arg source_commit "$GITHUB_SHA" \
             --arg signer_workflow "$SIGNER_WORKFLOW" \
             --arg openvmm_sha "$(sha256sum "$artifact_dir/openvmm" | cut -d' ' -f1)" \
@@ -137,18 +140,19 @@ jobs:
                   sha256:$initramfs_sha
                 }
               }
-            }' > "$artifact_dir/manifest.json"
+            }' > "$artifact_dir/nvx-test-x86_64.manifest.json"
       - name: Attest the pinned NVX artifact manifest
         id: attest_nvx_manifest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/nvx-attested-artifacts/manifest.json
+          subject-path: ${{ runner.temp }}/nvx-attested-artifacts/nvx-test-x86_64.manifest.json
       - name: Bundle the manifest attestation
         env:
           BUNDLE_PATH: ${{ steps.attest_nvx_manifest.outputs.bundle-path }}
         run: |
           set -euo pipefail
-          cp "$BUNDLE_PATH" "$RUNNER_TEMP/nvx-attested-artifacts/manifest.sigstore.jsonl"
+          cp "$BUNDLE_PATH" \
+            "$RUNNER_TEMP/nvx-attested-artifacts/nvx-test-x86_64.manifest.sigstore.jsonl"
       - name: Upload attested NVX artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -182,11 +186,15 @@ steps:
       cache: npm
 
   - name: Install host tools and build AWF
+    env:
+      AWF_RELEASE_TAG: v0.28.51
     run: |
       set -euo pipefail
       sudo apt-get update
       sudo apt-get install --yes --no-install-recommends \
         acl bubblewrap e2fsprogs erofs-utils jq nftables uidmap
+      # The local build must identify as the trusted release recorded in the manifest.
+      npm version "${AWF_RELEASE_TAG#v}" --no-git-tag-version --allow-same-version
       npm ci
       npm run build
 
@@ -205,11 +213,13 @@ steps:
       # every trusted artifact to be root-owned, so re-root them here. Once
       # chowned to root, only sudo can chmod them.
       sudo chown root:root "$artifact_dir"/openvmm "$artifact_dir"/vmlinux \
-        "$artifact_dir"/initramfs.cpio.gz "$artifact_dir"/manifest.json \
-        "$artifact_dir"/manifest.sigstore.jsonl
+        "$artifact_dir"/initramfs.cpio.gz \
+        "$artifact_dir"/nvx-test-x86_64.manifest.json \
+        "$artifact_dir"/nvx-test-x86_64.manifest.sigstore.jsonl
       sudo chmod 0555 "$artifact_dir/openvmm"
       sudo chmod 0444 "$artifact_dir/vmlinux" "$artifact_dir/initramfs.cpio.gz" \
-        "$artifact_dir/manifest.json" "$artifact_dir/manifest.sigstore.jsonl"
+        "$artifact_dir/nvx-test-x86_64.manifest.json" \
+        "$artifact_dir/nvx-test-x86_64.manifest.sigstore.jsonl"
 
   - name: Build the guest distro layer with the Node.js and Go toolchains
     env:
