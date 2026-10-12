@@ -256,6 +256,16 @@ steps:
         echo "real credential value reached the NVX guest via COPILOT_GITHUB_TOKEN" >&2
         exit 1
       fi
+      if [ -n "${COPILOT_PROVIDER_API_KEY:-}" ] && \
+         [ "$COPILOT_PROVIDER_API_KEY" != "ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
+        echo "real credential value reached the NVX guest via COPILOT_PROVIDER_API_KEY" >&2
+        exit 1
+      fi
+      if [ -n "${COPILOT_API_KEY:-}" ] && \
+         [ "$COPILOT_API_KEY" != "dummy-byok-key-for-offline-mode" ]; then
+        echo "real credential value reached the NVX guest via COPILOT_API_KEY" >&2
+        exit 1
+      fi
       printf '%s\n' "$AWF_NVX_SMOKE_MARKER" > /workspace/nvx-smoke-workspace-proof.txt
       runtime_home=/tmp/copilot-home
       mkdir -m 0700 "$runtime_home"
@@ -263,10 +273,19 @@ steps:
       XDG_CACHE_HOME="$runtime_home/.cache"; export XDG_CACHE_HOME
       XDG_CONFIG_HOME="$runtime_home/.config"; export XDG_CONFIG_HOME
       XDG_STATE_HOME="$runtime_home/.local/state"; export XDG_STATE_HOME
-      # The real credential remains in the API proxy sidecar. The nested CLI
-      # needs only the same fixed placeholders used by the outer AWF agent.
-      COPILOT_GITHUB_TOKEN="******"; export COPILOT_GITHUB_TOKEN
+      # Keep the nested pinned CLI on the same non-secret auth shape and fixed
+      # sidecar route that AWF gives the outer compiler-staged CLI. Real
+      # credentials remain exclusively in the API proxy sidecar.
+      COPILOT_GITHUB_TOKEN="ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; export COPILOT_GITHUB_TOKEN
+      COPILOT_TOKEN="$COPILOT_GITHUB_TOKEN"; export COPILOT_TOKEN
+      COPILOT_PROVIDER_API_KEY="$COPILOT_GITHUB_TOKEN"; export COPILOT_PROVIDER_API_KEY
       COPILOT_API_KEY="dummy-byok-key-for-offline-mode"; export COPILOT_API_KEY
+      COPILOT_API_URL="http://172.30.0.30:10002"; export COPILOT_API_URL
+      COPILOT_PROVIDER_BASE_URL="$COPILOT_API_URL"; export COPILOT_PROVIDER_BASE_URL
+      COPILOT_OFFLINE=true; export COPILOT_OFFLINE
+      test "$COPILOT_GITHUB_TOKEN" = "$COPILOT_TOKEN"
+      test "$COPILOT_API_URL" = "$COPILOT_PROVIDER_BASE_URL"
+      nc -z -w 5 172.30.0.30 10002
       /usr/local/bin/copilot \
         --prompt "Respond with exactly NVX-COPILOT-PROOF and nothing else." \
         --silent --no-color --stream on --allow-all-tools \
