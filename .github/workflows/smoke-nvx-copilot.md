@@ -22,7 +22,7 @@ engine:
 sandbox:
   agent:
     # Keep this aligned with both AWF_RELEASE_TAG values below when upgrading gh-aw/AWF.
-    version: v0.28.51
+    version: v0.28.54
     runtime: nvx
     nvx:
       preview: true
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      AWF_RELEASE_TAG: v0.28.51
+      AWF_RELEASE_TAG: v0.28.54
     permissions:
       contents: read
       id-token: write
@@ -165,7 +165,7 @@ steps:
 
   - name: Install host tools and build AWF
     env:
-      AWF_RELEASE_TAG: v0.28.51
+      AWF_RELEASE_TAG: v0.28.54
     run: |
       set -euo pipefail
       sudo apt-get update
@@ -238,7 +238,7 @@ steps:
       test "${COPILOT_API_URL:-}" = http://172.30.0.30:10002
       test "${COPILOT_PROVIDER_BASE_URL:-}" = "$COPILOT_API_URL"
       test "${COPILOT_TOKEN:-}" = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-      test "${COPILOT_PROVIDER_API_KEY:-}" = 'ghu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      test -z "${COPILOT_PROVIDER_API_KEY:-}"
       test "${COPILOT_API_KEY:-}" = dummy-byok-key-for-offline-mode
       if env | grep -Eq '^(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY)='; then
         echo "credential variable reached the NVX guest" >&2

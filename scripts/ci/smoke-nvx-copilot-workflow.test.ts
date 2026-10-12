@@ -20,7 +20,7 @@ const lock = yaml.load(fs.readFileSync(path.join(workflowsDir, 'smoke-nvx-copilo
 describe('Smoke NVX Copilot nested authentication', () => {
   it('inherits only the AWF placeholder and fixed Copilot API proxy route', () => {
     expect(guestScript).toContain(`test "\${COPILOT_TOKEN:-}" = '${COPILOT_PLACEHOLDER_TOKEN}'`);
-    expect(guestScript).toContain(`test "\${COPILOT_PROVIDER_API_KEY:-}" = '${COPILOT_PLACEHOLDER_TOKEN}'`);
+    expect(guestScript).toContain('test -z "${COPILOT_PROVIDER_API_KEY:-}"');
     expect(guestScript).toContain('test "${COPILOT_API_KEY:-}" = dummy-byok-key-for-offline-mode');
     expect(guestScript).toContain('test "${COPILOT_API_URL:-}" = http://172.30.0.30:10002');
     expect(guestScript).toContain('test "${COPILOT_PROVIDER_BASE_URL:-}" = "$COPILOT_API_URL"');
@@ -36,7 +36,7 @@ describe('Smoke NVX Copilot nested authentication', () => {
       "env | grep -Eq '^(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY)='",
     );
     expect(guestScript).toContain('real credential value reached the NVX guest via COPILOT_GITHUB_TOKEN');
-    expect(guestScript).toContain(`test "\${COPILOT_PROVIDER_API_KEY:-}" = '${COPILOT_PLACEHOLDER_TOKEN}'`);
+    expect(guestScript).toContain('test -z "${COPILOT_PROVIDER_API_KEY:-}"');
     expect(guestScript).toContain('test "${COPILOT_API_KEY:-}" = dummy-byok-key-for-offline-mode');
   });
 
@@ -83,6 +83,8 @@ describe('NVX Copilot smoke compiler contract', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'nvx-copilot-smoke-'));
     workspace = path.join(root, 'workspace');
+    fs.mkdirSync(workspace, { recursive: true });
+    workspace = fs.realpathSync(workspace);
     binary = path.join(workspace, '.gh-aw-nvx/gh-aw/bin/copilot');
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.writeFileSync(path.join(workspace, 'package.json'), '{}');
@@ -101,7 +103,6 @@ printf "NVX-COPILOT-PROOF\\n"
       COPILOT_API_URL: 'http://172.30.0.30:10002',
       COPILOT_PROVIDER_BASE_URL: 'http://172.30.0.30:10002',
       COPILOT_TOKEN: COPILOT_PLACEHOLDER_TOKEN,
-      COPILOT_PROVIDER_API_KEY: COPILOT_PLACEHOLDER_TOKEN,
       COPILOT_GITHUB_TOKEN: COPILOT_PLACEHOLDER_TOKEN,
       COPILOT_API_KEY: 'dummy-byok-key-for-offline-mode',
     };
