@@ -26,6 +26,7 @@ sandbox:
     runtime: nvx
     nvx:
       preview: true
+      guest-libc: musl
       network-isolation: true
       api-proxy: true
       mount-policy: workspace-only
@@ -271,6 +272,9 @@ steps:
       # including the workspace, so the repo's legacy-peer-deps setting is
       # restated here.
       export npm_config_legacy_peer_deps=true
+      # --env-all carries the hosted runner's GOROOT into the guest, but this
+      # Alpine layer has its own Go installation at a different path.
+      unset GOROOT
       export GOPATH=/tmp/nvx-go GOCACHE=/tmp/nvx-go-cache GOTOOLCHAIN=local
       mkdir -p "$HOME"
 

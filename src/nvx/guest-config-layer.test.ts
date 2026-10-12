@@ -9,6 +9,10 @@ describe('NvxGuestConfigLayer', () => {
     const home = path.join(root, 'home');
     await fs.mkdir(path.join(home, '.npm'), { recursive: true });
     await fs.writeFile(path.join(home, '.npm', 'cache'), 'allowed');
+    await fs.mkdir(path.join(home, '.cache', 'copilot'), { recursive: true });
+    await fs.writeFile(path.join(home, '.cache', 'copilot', 'state'), 'cached');
+    await fs.chmod(path.join(home, '.cache', 'copilot'), 0o555);
+    await fs.chmod(path.join(home, '.cache', 'copilot', 'state'), 0o444);
     await fs.mkdir(path.join(home, '.config', 'gh'), { recursive: true });
     await fs.writeFile(path.join(home, '.config', 'gh', 'hosts.yml'), 'secret');
     await fs.mkdir(path.join(home, '.azure'), { recursive: true });
@@ -21,6 +25,10 @@ describe('NvxGuestConfigLayer', () => {
       gid: process.getgid?.() ?? 1000,
       runScript: '#!/bin/sh\nexec true\n',
       homePath: home,
+      hostAliases: {
+        'api-proxy': '172.30.0.30',
+        'api.githubcopilot.com': '172.30.0.30',
+      },
     }, {
       chown: async () => undefined,
       lchown: async () => undefined,
@@ -31,6 +39,19 @@ describe('NvxGuestConfigLayer', () => {
         .resolves.toContain('exec true');
       await expect(fs.readFile(path.join(source, 'home/awf/.npm/cache'), 'utf8'))
         .resolves.toBe('allowed');
+      const copiedCacheDirectory = await fs.stat(
+        path.join(source, 'home/awf/.cache/copilot'),
+      );
+      expect(copiedCacheDirectory.mode & 0o700).toBe(0o700);
+      const copiedCacheFile = await fs.stat(
+        path.join(source, 'home/awf/.cache/copilot/state'),
+      );
+      expect(copiedCacheFile.mode & 0o600).toBe(0o600);
+      await expect(fs.readFile(path.join(source, 'etc/hosts'), 'utf8'))
+        .resolves.toBe(
+          '127.0.0.1 localhost\n::1 localhost\n' +
+            '172.30.0.30 api-proxy\n172.30.0.30 api.githubcopilot.com\n',
+        );
       await expect(fs.lstat(path.join(source, 'home/awf/.config/gh')))
         .rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.lstat(path.join(source, 'home/awf/.azure/credentials')))
@@ -45,6 +66,7 @@ describe('NvxGuestConfigLayer', () => {
       });
     } finally {
       await layer.cleanup();
+      await fs.chmod(path.join(home, '.cache', 'copilot'), 0o755);
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -68,6 +90,29 @@ describe('NvxGuestConfigLayer', () => {
       await expect(layer.stage()).rejects.toThrow(/must be a real directory/);
     } finally {
       await layer.cleanup();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the staged tree when permission restoration encounters a read-only path', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'awf-nvx-config-'));
+    const stagingRoot = path.join(root, 'staging');
+    const layer = new NvxGuestConfigLayer({
+      stagingRoot,
+      uid: process.getuid?.() ?? 1000,
+      gid: process.getgid?.() ?? 1000,
+      runScript: '#!/bin/sh\nexec true\n',
+    }, {
+      chown: async () => undefined,
+      lchown: async () => undefined,
+    });
+    await layer.stage();
+    const chmod = jest.spyOn(fs, 'chmod').mockRejectedValueOnce(new Error('read-only'));
+    try {
+      await expect(layer.cleanup()).resolves.toBeUndefined();
+      await expect(fs.lstat(stagingRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      chmod.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
     }
   });

@@ -26,6 +26,7 @@ sandbox:
     runtime: nvx
     nvx:
       preview: true
+      guest-libc: musl
       network-isolation: true
       api-proxy: true
       mount-policy: workspace-only
@@ -212,7 +213,8 @@ steps:
       package_dir="$RUNNER_TEMP/nvx-copilot-package"
       mkdir -p "$layer_root" "$package_dir"
       sudo docker pull "$ALPINE_IMAGE"
-      container=$(sudo docker create "$ALPINE_IMAGE")
+      container=$(sudo docker create "$ALPINE_IMAGE" apk add --no-cache bash)
+      sudo docker start --attach "$container"
       sudo docker export "$container" | tar -xf - -C "$layer_root"
       sudo docker rm "$container"
       mkdir -p "$layer_root/etc" "$layer_root/usr/local/bin"
@@ -262,6 +264,9 @@ steps:
       XDG_CACHE_HOME="$runtime_home/.cache"; export XDG_CACHE_HOME
       XDG_CONFIG_HOME="$runtime_home/.config"; export XDG_CONFIG_HOME
       XDG_STATE_HOME="$runtime_home/.local/state"; export XDG_STATE_HOME
+      # The real credential remains in the API proxy sidecar. The nested CLI
+      # needs only the same fixed placeholder used by the outer AWF agent.
+      COPILOT_GITHUB_TOKEN="******"; export COPILOT_GITHUB_TOKEN
       /usr/local/bin/copilot \
         --prompt "Respond with exactly NVX-COPILOT-PROOF and nothing else." \
         --silent --no-color --stream on --allow-all-tools \

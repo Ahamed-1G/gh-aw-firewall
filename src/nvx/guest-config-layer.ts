@@ -5,7 +5,7 @@ import {
   HOME_FORBIDDEN_SUBDIRS,
   HOME_TOOL_PATHS,
 } from '../config/mount-policy';
-import { NVX_GUEST_HOME, NVX_GUEST_RUN_SCRIPT } from './workspace-export';
+import { NVX_GUEST_HOME_SEED, NVX_GUEST_RUN_SCRIPT } from './workspace-export';
 
 const EXCLUDED_RELATIVE_PATHS = [
   ...CREDENTIAL_ENTRIES.map(({ path: entryPath }) => normalizeRelative(entryPath)),
@@ -18,6 +18,7 @@ export interface NvxGuestConfigLayerConfig {
   readonly gid: number;
   readonly runScript: string;
   readonly homePath?: string;
+  readonly hostAliases?: Readonly<Record<string, string>>;
 }
 
 export interface NvxGuestConfigLayerDependencies {
@@ -51,6 +52,7 @@ export class NvxGuestConfigLayer {
     await fs.chmod(this.config.stagingRoot, 0o700);
     await fs.mkdir(this.layerSourcePath, { recursive: true, mode: 0o755 });
     await this.stageGuestHome();
+    await this.stageHostAliases();
     await this.stageRunScript();
     this.staged = true;
     return this.layerSourcePath;
@@ -63,7 +65,7 @@ export class NvxGuestConfigLayer {
   }
 
   private async stageGuestHome(): Promise<void> {
-    const guestHome = path.join(this.layerSourcePath, NVX_GUEST_HOME.slice(1));
+    const guestHome = path.join(this.layerSourcePath, NVX_GUEST_HOME_SEED.slice(1));
     await fs.mkdir(guestHome, { recursive: true, mode: 0o700 });
     await this.chown(guestHome, this.config.uid, this.config.gid);
     if (!this.config.homePath) return;
@@ -95,6 +97,23 @@ export class NvxGuestConfigLayer {
     await this.chown(path.dirname(scriptPath), 0, 0);
     await fs.chmod(path.dirname(scriptPath), 0o555);
   }
+
+  private async stageHostAliases(): Promise<void> {
+    const aliases = Object.entries(this.config.hostAliases ?? {});
+    if (aliases.length === 0) return;
+    const hostsPath = path.join(this.layerSourcePath, 'etc/hosts');
+    await fs.mkdir(path.dirname(hostsPath), { recursive: true, mode: 0o755 });
+    const lines = [
+      '127.0.0.1 localhost',
+      '::1 localhost',
+      ...aliases
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, address]) => `${address} ${name}`),
+    ];
+    await fs.writeFile(hostsPath, `${lines.join('\n')}\n`, { mode: 0o444 });
+    await this.chown(hostsPath, 0, 0);
+    await fs.chmod(hostsPath, 0o444);
+  }
 }
 
 async function restoreWritable(root: string): Promise<void> {
@@ -116,7 +135,10 @@ async function restoreWritable(root: string): Promise<void> {
 
 async function copySafeTree(source: string, destination: string, root: string): Promise<void> {
   const sourceStat = await fs.lstat(source);
-  await fs.mkdir(destination, { recursive: true, mode: sourceStat.mode & 0o7777 });
+  await fs.mkdir(destination, {
+    recursive: true,
+    mode: (sourceStat.mode & 0o7777) | 0o700,
+  });
   const entries = await fs.readdir(source, { withFileTypes: true });
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     const sourcePath = path.join(source, entry.name);
@@ -148,7 +170,11 @@ async function applyOwnership(
     return;
   }
   await chown(root, uid, gid);
-  if (!stat.isDirectory()) return;
+  if (!stat.isDirectory()) {
+    if (stat.isFile()) await fs.chmod(root, (stat.mode & 0o7777) | 0o600);
+    return;
+  }
+  await fs.chmod(root, (stat.mode & 0o7777) | 0o700);
   for (const entry of await fs.readdir(root)) {
     await applyOwnership(path.join(root, entry), uid, gid, chown, lchown);
   }
