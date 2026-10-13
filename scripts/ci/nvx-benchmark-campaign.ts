@@ -620,16 +620,25 @@ export function aggregateCampaign(
   }
 
   if (manifest.canary) {
-    const guestTools = [...attempts.values()]
-      .flat()
-      .map((attempt) => JSON.stringify(attempt.provenance.observedGuestTools));
-    if (new Set(guestTools).size > 1) {
-      throw new Error('guest tool versions differ across matched canary samples');
+    const canaryAttempts = [...attempts.values()].flat();
+    for (const runtime of ['nvx', 'cloud-hypervisor'] as const) {
+      const guestTools = canaryAttempts
+        .filter((attempt) => attempt.runtime === runtime)
+        .map((attempt) => JSON.stringify(attempt.provenance.observedGuestTools));
+      if (new Set(guestTools).size > 1) {
+        throw new Error('guest tool versions differ across matched canary samples');
+      }
     }
-    const nvxToolchains = [...attempts.values()]
-      .flat()
+    const nvxToolchains = canaryAttempts
       .filter((attempt) => attempt.runtime === 'nvx')
-      .map((attempt) => JSON.stringify(attempt.provenance.nvxGuestToolchain));
+      .map((attempt) => {
+        const toolchain = attempt.provenance.nvxGuestToolchain;
+        return JSON.stringify(toolchain && {
+          packageInventorySha256: toolchain.packageInventorySha256,
+          packages: toolchain.packages,
+          tools: toolchain.tools,
+        });
+      });
     if (new Set(nvxToolchains).size > 1) {
       throw new Error('NVX guest toolchain provenance differs across canary samples');
     }

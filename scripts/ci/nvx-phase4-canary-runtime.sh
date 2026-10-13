@@ -11,6 +11,8 @@ sample_id=${3:?sample id is required}
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 
+evidence_dir=$(dirname "$AWF_BENCHMARK_EVENTS")
+
 case "$runtime" in
   nvx|cloud-hypervisor) ;;
   *) echo "unsupported runtime: $runtime" >&2; exit 2 ;;
@@ -68,16 +70,36 @@ preflight_started=$(now_ms)
 test "$(uname -s)" = Linux
 test "$(uname -m)" = x86_64
 test -c /dev/kvm
-test -x dist/cli.js
+test -f dist/cli.js
 sudo sync
 sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
 
-kvm_acl_before=$(sudo getfacl --absolute-names --numeric /dev/kvm 2>/dev/null)
+if [ -n "${AWF_PHASE4_KVM_ACL_BASELINE:-}" ]; then
+  kvm_acl_before=$(sudo cat "$AWF_PHASE4_KVM_ACL_BASELINE")
+else
+  kvm_acl_before=$(sudo getfacl --absolute-names --numeric /dev/kvm 2>/dev/null)
+fi
+printf '%s\n' "$kvm_acl_before" > "$evidence_dir/kvm-acl-before.txt"
+chmod 0600 "$evidence_dir/kvm-acl-before.txt"
+restore_kvm_acl() {
+  sudo setfacl --restore="$evidence_dir/kvm-acl-before.txt" >/dev/null 2>&1 || true
+}
+normalize_kvm_acl() {
+  local acl=$1
+  if grep -Eq '^(user|group):[^:]' <<<"$acl"; then
+    printf '%s\n' "$acl"
+  else
+    grep -v '^mask::' <<<"$acl"
+  fi
+}
+trap restore_kvm_acl EXIT
 processes_before=$(runtime_process_snapshot)
 netns_before=$(sudo ip netns list 2>/dev/null || true)
 cgroups_before=$(sudo find /sys/fs/cgroup -maxdepth 4 -type d \
   \( -path '/sys/fs/cgroup/awf-nvx*' -o \
-     -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) -print 2>/dev/null | sort)
+     -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) \
+  ! -path '/sys/fs/cgroup/awf-nvx' \
+  ! -path '/sys/fs/cgroup/awf-cloud-hypervisor' -print 2>/dev/null | sort)
 mounts_before=$(findmnt -rn -o TARGET 2>/dev/null | grep -E 'awf-(nvx|cloud-hypervisor)' || true)
 runtime_storage_before=$(runtime_storage_bytes)
 
@@ -139,32 +161,58 @@ cat > "$workspace_dir/workload.sh" <<'EOF'
 #!/bin/sh
 set -eu
 root=${AWF_PHASE4_CANARY_ROOT:?}
+guest_stage=bootstrap
+guest_fail() {
+  code=$1
+  reason=$2
+  printf '%s\n' "$reason" > "$root/guest-error"
+  exit "$code"
+}
+guest_exit() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ ! -s "$root/guest-error" ]; then
+    printf 'stage=%s status=%s\n' "$guest_stage" "$status" > "$root/guest-error"
+  fi
+}
+trap guest_exit EXIT
+guest_stage=workspace
 test "$(pwd)" = /workspace
 printf '%s\n' ready > "$root/runtime-ready"
-test ! -e /host
+if awk '$5 == "/host" { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+  guest_fail 40 host-mount-visible
+fi
+guest_stage=credentials
 if env | grep -Eq '^(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY)='; then
-  exit 41
+  guest_fail 41 real-credential-environment-visible
 fi
-if [ -n "${COPILOT_GITHUB_TOKEN:-}" ] && [ "$COPILOT_GITHUB_TOKEN" != "******" ]; then
-  exit 42
+copilot_placeholder="ghu_$(printf '%036s' '' | tr ' ' a)"
+if [ -n "${COPILOT_GITHUB_TOKEN:-}" ] &&
+   [ "$COPILOT_GITHUB_TOKEN" != "$copilot_placeholder" ]; then
+  guest_fail 42 copilot-github-token-not-placeholder
 fi
-if [ -n "${COPILOT_TOKEN:-}" ] && [ "$COPILOT_TOKEN" != "******" ]; then
-  exit 44
+if [ -n "${COPILOT_TOKEN:-}" ] && [ "$COPILOT_TOKEN" != "$copilot_placeholder" ]; then
+  guest_fail 44 copilot-token-not-placeholder
 fi
 if [ -n "${COPILOT_API_KEY:-}" ] &&
    [ "$COPILOT_API_KEY" != "dummy-byok-key-for-offline-mode" ]; then
-  exit 45
+  guest_fail 45 copilot-api-key-not-placeholder
 fi
-test -z "${COPILOT_PROVIDER_API_KEY:-}"
+if [ -n "${COPILOT_PROVIDER_API_KEY:-}" ] &&
+   [ "$COPILOT_PROVIDER_API_KEY" != "$copilot_placeholder" ]; then
+  guest_fail 46 copilot-provider-api-key-not-placeholder
+fi
+guest_stage=egress
 blocked=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://example.com 2>/dev/null || true)
 blocked=${blocked:-000}
-case "$blocked" in 000|403) ;; *) exit 43 ;; esac
-guest_node_version=$(node --version)
+case "$blocked" in 000|403) ;; *) guest_fail 43 deny-by-default-egress-failed ;; esac
+guest_stage=toolchain
+guest_node_version=$("$AWF_PHASE4_NODE_BIN" --version)
 guest_curl_version=$(curl --version | awk 'NR == 1 {print $1, $2}')
-scratch_capacity=$(df -PB1 /tmp | awk 'NR == 2 {print $2}')
+scratch_capacity=$(df -Pk /tmp | awk 'NR == 2 {print $2 * 1024}')
 scratch_before_bytes=$(du -sb /tmp 2>/dev/null | awk '{print $1}')
 scratch_before_bytes=${scratch_before_bytes:-0}
 scratch_peak_bytes=$scratch_before_bytes
+guest_stage=workload
 case "${AWF_PHASE4_WORKLOAD:?}" in
   build-test)
     printf '%s\n' ready > "$root/first-work"
@@ -175,8 +223,8 @@ const value = Array.from({ length: 1000 }, (_, index) => index).reduce((a, b) =>
 assert.equal(value, 499500);
 process.stdout.write(`${value}\n`);
 BUILD
-    node --check /tmp/phase4-build/build.js
-    node /tmp/phase4-build/build.js > "$root/build-proof"
+    "$AWF_PHASE4_NODE_BIN" --check /tmp/phase4-build/build.js
+    "$AWF_PHASE4_NODE_BIN" /tmp/phase4-build/build.js > "$root/build-proof"
     grep -qx 499500 "$root/build-proof"
     test -s "$root/build-proof"
     scratch_peak_bytes=$(du -sb /tmp 2>/dev/null | awk '{print $1}')
@@ -226,24 +274,46 @@ if [ "$scratch_after_bytes" -gt "$scratch_peak_bytes" ]; then
 fi
 scratch_usage_bytes=$((scratch_peak_bytes - scratch_before_bytes))
 if [ "$scratch_usage_bytes" -lt 0 ]; then scratch_usage_bytes=0; fi
-jq -n \
-  --arg nodeVersion "$guest_node_version" \
-  --arg curlVersion "$guest_curl_version" \
-  --argjson scratchCapacityBytes "$scratch_capacity" \
-  --argjson scratchUsageBytes "$scratch_usage_bytes" \
-  '{credentialIsolation:true,egressPolicy:true,workspaceOnlyExposure:true,
-    nodeVersion:$nodeVersion,curlVersion:$curlVersion,
-    scratchCapacityBytes:$scratchCapacityBytes,scratchUsageBytes:$scratchUsageBytes}' \
-  > "$root/guest-status.json"
+guest_stage=evidence
+GUEST_NODE_VERSION=$guest_node_version \
+GUEST_CURL_VERSION=$guest_curl_version \
+SCRATCH_CAPACITY_BYTES=$scratch_capacity \
+SCRATCH_USAGE_BYTES=$scratch_usage_bytes \
+"$AWF_PHASE4_NODE_BIN" -e '
+  const fs = require("node:fs");
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    credentialIsolation: true,
+    egressPolicy: true,
+    workspaceOnlyExposure: true,
+    nodeVersion: process.env.GUEST_NODE_VERSION,
+    curlVersion: process.env.GUEST_CURL_VERSION,
+    scratchCapacityBytes: Number(process.env.SCRATCH_CAPACITY_BYTES),
+    scratchUsageBytes: Number(process.env.SCRATCH_USAGE_BYTES),
+  }));
+' "$root/guest-status.json"
 printf '%s\n' complete > "$root/workload-complete"
+trap - EXIT
 EOF
 chmod 0755 "$workspace_dir/workload.sh"
 
-copilot_host="$RUNNER_TEMP/gh-aw/bin/copilot"
 if [ "$workload" = copilot-inference ]; then
+  if [ "$runtime" = nvx ]; then
+    copilot_host="$RUNNER_TEMP/gh-aw/nvx-engine/copilot"
+  else
+    copilot_host=$(command -v copilot)
+  fi
   test -x "$copilot_host"
   cp "$copilot_host" "$workspace_dir/copilot"
   chmod 0555 "$workspace_dir/copilot"
+fi
+if [ "$runtime" = nvx ]; then
+  node_guest=node
+else
+  node_host=$(command -v node)
+  test -x "$node_host"
+  cp "$node_host" "$workspace_dir/node"
+  chmod 0555 "$workspace_dir/node"
+  node_guest="/workspace/.nvx-phase4-canary/$sample_id/node"
 fi
 
 config="$sample_root/awf-config.json"
@@ -269,21 +339,23 @@ jq -n \
 export AWF_PHASE4_CANARY_ROOT="/workspace/.nvx-phase4-canary/$sample_id"
 export AWF_PHASE4_WORKLOAD="$workload"
 export AWF_PHASE4_COPILOT_BIN="$AWF_PHASE4_CANARY_ROOT/copilot"
+export AWF_PHASE4_NODE_BIN="$node_guest"
 preflight_completed=
 
 set +e
 # The runner user owns awf_log; sudo is required only for the AWF process.
 # shellcheck disable=SC2024
-sudo --preserve-env=AWF_PHASE4_CANARY_ROOT,AWF_PHASE4_WORKLOAD,AWF_PHASE4_COPILOT_BIN,COPILOT_GITHUB_TOKEN \
+sudo --preserve-env=AWF_PHASE4_CANARY_ROOT,AWF_PHASE4_WORKLOAD,AWF_PHASE4_COPILOT_BIN,AWF_PHASE4_NODE_BIN,COPILOT_GITHUB_TOKEN,GITHUB_ACTIONS,RUNNER_ENVIRONMENT,ImageOS \
   node dist/cli.js \
   --config "$config" \
   --work-dir "$work_dir" \
   --container-workdir /workspace \
   --enable-api-proxy \
-  --image-tag v0.28.54 \
+  --image-tag "0.28.54,squid=sha256:960930db796d005e63153b9ffd984b58ebda1ed8c26800c09eb7515dc94237db,agent=sha256:fc4f3d07d9f0479aa76d4a6d55f36735c29e0558f10a413fbd36e3d00b34a830,api-proxy=sha256:f8dff30ac37a8987b564f2872796a9c093b3ab281b1cdfc3493c1ea5fa84ff79" \
   --env "AWF_PHASE4_CANARY_ROOT=$AWF_PHASE4_CANARY_ROOT" \
   --env "AWF_PHASE4_WORKLOAD=$workload" \
   --env "AWF_PHASE4_COPILOT_BIN=$AWF_PHASE4_COPILOT_BIN" \
+  --env "AWF_PHASE4_NODE_BIN=$AWF_PHASE4_NODE_BIN" \
   --log-level debug \
   "${runtime_args[@]}" \
   -- "/bin/sh $AWF_PHASE4_CANARY_ROOT/workload.sh" \
@@ -317,13 +389,39 @@ while kill -0 "$awf_pid" 2>/dev/null; do
     peak_host_disk_bytes=$current_host
   fi
   if [ -z "$observed_cgroup" ]; then
+    if [ "$runtime" = nvx ]; then
+      runtime_pid=$(sudo pgrep -xo openvmm 2>/dev/null || true)
+    else
+      runtime_pid=$(sudo pgrep -f \
+        '/var/lib/awf-cloud-hypervisor/trusted-artifacts/run-[^/]*/[c]loud-hypervisor --api-socket' \
+        2>/dev/null | sed -n '1p' || true)
+    fi
+    if [[ "$runtime_pid" =~ ^[0-9]+$ ]] &&
+       sudo test -r "/proc/$runtime_pid/cgroup"; then
+      cgroup_membership=$(sudo awk -F: '$1 == "0" { print $3 }' \
+        "/proc/$runtime_pid/cgroup")
+      candidate="/sys/fs/cgroup$cgroup_membership"
+      if [[ "$candidate" == "/sys/fs/cgroup/awf-$runtime/"* ]] &&
+         sudo test -f "$candidate/memory.max" &&
+         sudo test -f "$candidate/cpu.max" &&
+         sudo test -f "$candidate/pids.max" &&
+         sudo test -f "$candidate/cpu.stat"; then
+        observed_cgroup=$candidate
+        preflight_completed=$(now_ms)
+        observed_memory_max=$(sudo cat "$candidate/memory.max")
+        observed_cpu_max=$(sudo cat "$candidate/cpu.max")
+        observed_pids_max=$(sudo cat "$candidate/pids.max")
+      fi
+    fi
+  fi
+  if [ -z "$observed_cgroup" ]; then
     while IFS= read -r candidate; do
       [ -n "$candidate" ] || continue
       if ! grep -Fxq "$candidate" <<<"$cgroups_before" &&
-         [ -f "$candidate/memory.max" ] &&
-         [ -f "$candidate/cpu.max" ] &&
-         [ -f "$candidate/pids.max" ] &&
-         [ -f "$candidate/cpu.stat" ]; then
+         sudo test -f "$candidate/memory.max" &&
+         sudo test -f "$candidate/cpu.max" &&
+         sudo test -f "$candidate/pids.max" &&
+         sudo test -f "$candidate/cpu.stat"; then
         observed_cgroup=$candidate
         preflight_completed=$(now_ms)
         observed_memory_max=$(sudo cat "$candidate/memory.max")
@@ -333,11 +431,14 @@ while kill -0 "$awf_pid" 2>/dev/null; do
       fi
     done < <(sudo find /sys/fs/cgroup -maxdepth 4 -type d \
       \( -path '/sys/fs/cgroup/awf-nvx*' -o \
-         -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) -print 2>/dev/null)
+         -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) \
+      ! -path '/sys/fs/cgroup/awf-nvx' \
+      ! -path '/sys/fs/cgroup/awf-cloud-hypervisor' -print 2>/dev/null)
   fi
-  if [ -n "$observed_cgroup" ] && [ -f "$observed_cgroup/cpu.stat" ]; then
+  if [ -n "$observed_cgroup" ] &&
+     sudo test -f "$observed_cgroup/cpu.stat"; then
     current_cpu_micros=$(sudo awk '$1 == "usage_usec" { print $2 }' \
-         "$observed_cgroup/cpu.stat")
+         "$observed_cgroup/cpu.stat" 2>/dev/null || true)
     if [[ "$current_cpu_micros" =~ ^[0-9]+$ ]] &&
           [ "$current_cpu_micros" -gt "$cpu_usage_micros" ]; then
          cpu_usage_micros=$current_cpu_micros
@@ -362,7 +463,32 @@ set +e
 wait "$awf_pid"
 awf_status=$?
 set -e
+
+for _cleanup_attempt in $(seq 1 50); do
+  processes_after=$(runtime_process_snapshot)
+  netns_after=$(sudo ip netns list 2>/dev/null || true)
+  cgroups_after=$(sudo find /sys/fs/cgroup -maxdepth 4 -type d \
+    \( -path '/sys/fs/cgroup/awf-nvx*' -o \
+       -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) \
+    ! -path '/sys/fs/cgroup/awf-nvx' \
+    ! -path '/sys/fs/cgroup/awf-cloud-hypervisor' -print 2>/dev/null | sort)
+  mounts_after=$(findmnt -rn -o TARGET 2>/dev/null | grep -E 'awf-(nvx|cloud-hypervisor)' || true)
+  kvm_acl_after=$(sudo getfacl --absolute-names --numeric /dev/kvm 2>/dev/null)
+  if [ "$processes_before" = "$processes_after" ] &&
+     [ "$netns_before" = "$netns_after" ] &&
+     [ "$cgroups_before" = "$cgroups_after" ] &&
+     [ "$mounts_before" = "$mounts_after" ] &&
+     [ "$(normalize_kvm_acl "$kvm_acl_before")" = \
+       "$(normalize_kvm_acl "$kvm_acl_after")" ]; then
+    break
+  fi
+  sleep 0.1
+done
 cleanup_completed=$(now_ms)
+printf '%s\n' "$kvm_acl_after" > "$evidence_dir/kvm-acl-after.txt"
+chmod 0600 "$evidence_dir/kvm-acl-after.txt"
+restore_kvm_acl
+trap - EXIT
 
 runtime_ready=${runtime_ready:-0}
 first_work=${first_work:-0}
@@ -406,20 +532,18 @@ jq -n \
   }' > "$AWF_BENCHMARK_EVENTS"
 
 residue=()
-processes_after=$(runtime_process_snapshot)
-netns_after=$(sudo ip netns list 2>/dev/null || true)
-cgroups_after=$(sudo find /sys/fs/cgroup -maxdepth 4 -type d \
-  \( -path '/sys/fs/cgroup/awf-nvx*' -o \
-     -path '/sys/fs/cgroup/awf-cloud-hypervisor*' \) -print 2>/dev/null | sort)
-mounts_after=$(findmnt -rn -o TARGET 2>/dev/null | grep -E 'awf-(nvx|cloud-hypervisor)' || true)
 [ "$processes_before" = "$processes_after" ] || residue+=("runtime-process")
 [ "$netns_before" = "$netns_after" ] || residue+=("network-namespace")
 [ "$cgroups_before" = "$cgroups_after" ] || residue+=("cgroup")
 [ "$mounts_before" = "$mounts_after" ] || residue+=("mount")
 test ! -e "$work_dir" || residue+=("run-directory:$work_dir")
-kvm_acl_after=$(sudo getfacl --absolute-names --numeric /dev/kvm 2>/dev/null)
 kvm_restored=false
-if [ "$kvm_acl_before" = "$kvm_acl_after" ]; then kvm_restored=true; fi
+if [ "$(normalize_kvm_acl "$kvm_acl_before")" = \
+  "$(normalize_kvm_acl "$kvm_acl_after")" ]; then
+  kvm_restored=true
+else
+  residue+=("kvm-acl")
+fi
 guest_ok=false
 egress=false
 credential=false
@@ -465,14 +589,27 @@ else
   done
 fi
 resource_limits=false
+# Both launchers add 256 MiB of host-runtime headroom to the matched 4 GiB
+# guest limit.
+expected_memory_max=4563402752
 if [ -n "$observed_cgroup" ] && [ "$observed_pids_max" = 256 ]; then
   read -r cpu_quota cpu_period <<<"$observed_cpu_max"
-  if [ "$observed_memory_max" = 4563402752 ] &&
+  if [ "$observed_memory_max" = "$expected_memory_max" ] &&
      [ "$cpu_period" = 100000 ] &&
      [ "$cpu_quota" = 200000 ]; then
     resource_limits=true
   fi
 fi
+jq -n \
+  --arg cgroup "$observed_cgroup" \
+  --arg memoryMax "$observed_memory_max" \
+  --arg cpuMax "$observed_cpu_max" \
+  --arg pidsMax "$observed_pids_max" \
+  --arg expectedMemoryMax "$expected_memory_max" \
+  '{cgroup:$cgroup,memoryMax:$memoryMax,cpuMax:$cpuMax,pidsMax:$pidsMax,
+    expectedMemoryMax:$expectedMemoryMax}' \
+  > "$evidence_dir/resources.json"
+chmod 0600 "$evidence_dir/resources.json"
 
 raw_evidence_dir="$(dirname "$AWF_BENCHMARK_EVENTS")/runtime-$sample_id"
 mkdir "$raw_evidence_dir"
@@ -486,6 +623,9 @@ for proof in build-proof copilot-proof; do
     cp --no-clobber "$workspace_dir/$proof" "$raw_evidence_dir/$proof"
   fi
 done
+if [ -s "$workspace_dir/guest-error" ]; then
+  cp --no-clobber "$workspace_dir/guest-error" "$raw_evidence_dir/guest-error.txt"
+fi
 token_log=$(find "$proxy_logs" -name token-usage.jsonl -type f -print -quit)
 if [ -n "$token_log" ] && [ -n "${AWF_PHASE4_TOKEN_USAGE_OUTPUT:-}" ]; then
   cp --no-clobber "$token_log" "$AWF_PHASE4_TOKEN_USAGE_OUTPUT"

@@ -109,6 +109,11 @@ describe('NVX benchmark campaign evidence', () => {
     expect(source).toContain('v0.91.9');
     expect(source).toContain('v0.28.54');
     expect(source).toContain('install_copilot_cli.sh" 1.0.95');
+    expect(source).toContain("matrix.runtime == 'nvx' && 'musl' || 'glibc'");
+    expect(source).toContain('AWF_PHASE4_KVM_ACL_BASELINE');
+    expect(source).toContain("getSafeHostUid()");
+    expect(source).toContain("'awf:x:%s:%s:AWF workload:/home/awf:/bin/sh");
+    expect(source).toContain('install -d -o root -g root -m 1777 "$layer/tmp"');
     expect(source).toContain('promotionEligible == false');
     expect(source).not.toContain('mode: full');
 
@@ -116,9 +121,34 @@ describe('NVX benchmark campaign evidence', () => {
       __dirname, '..', '..', 'scripts', 'ci', 'nvx-phase4-canary-runtime.sh',
     ), 'utf8');
     expect(harness).toContain('--container-workdir /workspace');
+    expect(harness).toContain('test -f dist/cli.js');
+    expect(harness).not.toContain('test -x dist/cli.js');
+    expect(harness).toContain('$RUNNER_TEMP/gh-aw/nvx-engine/copilot');
+    expect(harness).toContain('copilot_host=$(command -v copilot)');
+    expect(harness).toContain('GITHUB_ACTIONS,RUNNER_ENVIRONMENT,ImageOS');
+    expect(harness).toContain('0.28.54,squid=sha256:960930db');
+    expect(harness).toContain("copilot_placeholder=\"ghu_$(printf '%036s' '' | tr ' ' a)\"");
+    expect(harness).toContain('COPILOT_PROVIDER_API_KEY" != "$copilot_placeholder"');
+    expect(harness).toContain('"/proc/$runtime_pid/cgroup"');
+    expect(harness).toContain('sudo test -r "/proc/$runtime_pid/cgroup"');
+    expect(harness).toContain('sudo test -f "$candidate/memory.max"');
+    expect(harness).toContain("! -path '/sys/fs/cgroup/awf-nvx'");
+    expect(harness.split("! -path '/sys/fs/cgroup/awf-nvx'").length - 1).toBe(3);
+    expect(harness).toContain('setfacl --restore="$evidence_dir/kvm-acl-before.txt"');
+    expect(harness).toContain('host-mount-visible');
+    expect(harness).toContain('df -Pk /tmp');
+    expect(harness).toContain('guest-error.txt');
+    expect(harness).toContain('AWF_PHASE4_NODE_BIN');
+    expect(harness).toContain('--nvx-memory-max-bytes 4294967296');
+    expect(harness).toContain('expected_memory_max=4563402752');
+    expect(harness).toContain("grep -Eq '^(user|group):[^:]'");
+    expect(harness).toContain("grep -v '^mask::'");
+    expect(harness).toContain('residue+=("kvm-acl")');
+    expect(harness).toContain('expected_memory_max=4563402752');
+    expect(harness).toContain('resources.json');
     expect(harness).toContain('--cloud-hypervisor-vcpus 1');
     expect(harness).toContain('--nvx-memory-mib 4096');
-    expect(harness).toContain('[ "$observed_memory_max" = 4563402752 ]');
+    expect(harness).toContain('[ "$observed_memory_max" = "$expected_memory_max" ]');
     expect(harness).toContain('[ "$cpu_quota" = 200000 ]');
     expect(harness).toContain('runtime-ready');
     expect(harness).toContain('resourceLimitsEnforced:$resourceLimitsEnforced');
