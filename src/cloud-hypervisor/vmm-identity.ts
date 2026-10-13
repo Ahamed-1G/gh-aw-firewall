@@ -4,6 +4,12 @@ import * as path from 'path';
 import { createDefaultIdentityDependencies } from '../identity-dependencies';
 import { withDirectoryLock, type DirectoryLockOwner } from '../microvm/directory-lock';
 import { resolveAndValidateVmmAccount } from '../vmm-account-validation';
+import {
+  deviceAclArgument,
+  parseDeviceAcl,
+  sameDeviceAcl,
+  type CloudHypervisorDevicePath,
+} from './device-acl';
 
 const ACCOUNT_PREFIX = 'awfvmm-';
 const ACCOUNT_LOCK_DIRECTORY = '/run/awf-cloud-hypervisor/.account-lock';
@@ -34,8 +40,8 @@ export interface CloudHypervisorVmmIdentityToolPaths {
 export interface CloudHypervisorVmmIdentityObserver {
   prepareAccount(name: string): Promise<void>;
   captureIdentity(identity: CloudHypervisorVmmIdentity): Promise<void>;
-  prepareAcl(path: string): Promise<void>;
-  releaseAcl(path: string): Promise<void>;
+  prepareAcl(path: CloudHypervisorDevicePath, baseline: readonly string[]): Promise<void>;
+  releaseAcl(path: CloudHypervisorDevicePath): Promise<void>;
 }
 
 export interface CloudHypervisorVmmIdentityDependencies {
@@ -65,6 +71,7 @@ export class CloudHypervisorVmmIdentityManager {
   private identity: CloudHypervisorVmmIdentity | undefined;
   private provisionalAccountName: string | undefined;
   private readonly aclPaths = new Set<string>();
+  private readonly aclBaselines = new Map<CloudHypervisorDevicePath, string[]>();
 
   constructor(
     private readonly runId: string,
@@ -138,7 +145,7 @@ export class CloudHypervisorVmmIdentityManager {
         operationError = error;
       }
       try {
-        await this.revokeDeviceAccessLocked(identity);
+        await this.revokeDeviceAccessLocked();
       } catch (revokeError) {
         if (operationError) {
           throw new Error(
@@ -210,7 +217,7 @@ export class CloudHypervisorVmmIdentityManager {
           `Refusing to remove reused Cloud Hypervisor VMM account ${identity.name}`,
         );
       }
-      await this.withDeviceAclLock(() => this.revokeDeviceAccessLocked(identity));
+      await this.withDeviceAclLock(() => this.revokeDeviceAccessLocked());
       await this.removeAccountState(identity.name);
       this.identity = undefined;
     });
@@ -221,11 +228,16 @@ export class CloudHypervisorVmmIdentityManager {
     includeTun: boolean,
   ): Promise<void> {
     for (const devicePath of includeTun ? VMM_DEVICE_PATHS : VMM_DEVICE_PATHS.slice(0, 1)) {
-      await this.observer?.prepareAcl(devicePath);
+      const before = await this.dependencies.run(this.tools.getfacl, [
+        '--absolute-names', '--numeric', devicePath,
+      ]);
+      const baseline = parseDeviceAcl(before.stdout);
+      await this.observer?.prepareAcl(devicePath, baseline);
       await this.dependencies.run(this.tools.setfacl, [
         '--modify', `user:${identity.uid}:rw`, devicePath,
       ]);
       this.aclPaths.add(devicePath);
+      this.aclBaselines.set(devicePath, baseline);
       const { stdout } = await this.dependencies.run(this.tools.getfacl, [
         '--absolute-names', '--numeric', devicePath,
       ]);
@@ -235,21 +247,26 @@ export class CloudHypervisorVmmIdentityManager {
     }
   }
 
-  private async revokeDeviceAccessLocked(identity: CloudHypervisorVmmIdentity): Promise<void> {
+  private async revokeDeviceAccessLocked(): Promise<void> {
     const errors: unknown[] = [];
     for (const devicePath of [...this.aclPaths].reverse()) {
       try {
+        const baseline = this.aclBaselines.get(devicePath as CloudHypervisorDevicePath);
+        if (!baseline) {
+          throw new Error(`Cloud Hypervisor VMM ACL baseline is missing for ${devicePath}`);
+        }
         await this.dependencies.run(this.tools.setfacl, [
-          '--remove', `user:${identity.uid}`, devicePath,
+          `--set=${deviceAclArgument(baseline)}`, devicePath,
         ]);
         const { stdout } = await this.dependencies.run(this.tools.getfacl, [
           '--absolute-names', '--numeric', devicePath,
         ]);
-        if (stdout.split(/\r?\n/).some((line) => line.startsWith(`user:${identity.uid}:`))) {
-          throw new Error(`Cloud Hypervisor VMM ACL removal validation failed for ${devicePath}`);
+        if (!sameDeviceAcl(parseDeviceAcl(stdout), baseline)) {
+          throw new Error(`Cloud Hypervisor VMM ACL restoration failed for ${devicePath}`);
         }
-        await this.observer?.releaseAcl(devicePath);
+        await this.observer?.releaseAcl(devicePath as CloudHypervisorDevicePath);
         this.aclPaths.delete(devicePath);
+        this.aclBaselines.delete(devicePath as CloudHypervisorDevicePath);
       } catch (error) {
         errors.push(error);
       }
@@ -308,8 +325,11 @@ export class CloudHypervisorVmmIdentityManager {
     return this.withLock(ACCOUNT_LOCK_DIRECTORY, ACCOUNT_LOCK_TIMEOUT_MS, operation);
   }
 
-  private async withDeviceAclLock<T>(operation: () => Promise<T>): Promise<T> {
-    return this.withLock(DEVICE_ACL_LOCK_DIRECTORY, DEVICE_ACL_LOCK_TIMEOUT_MS, operation);
+  async withDeviceAclLock<T>(
+    operation: () => Promise<T>,
+    lockDirectory = DEVICE_ACL_LOCK_DIRECTORY,
+  ): Promise<T> {
+    return this.withLock(lockDirectory, DEVICE_ACL_LOCK_TIMEOUT_MS, operation);
   }
 
   private async withLock<T>(
@@ -431,6 +451,25 @@ export class CloudHypervisorVmmIdentityManager {
   }
 }
 
+export function withCloudHypervisorDeviceAclLock<T>(
+  tools: CloudHypervisorVmmIdentityToolPaths,
+  operation: () => Promise<T>,
+  dependencies: Partial<CloudHypervisorVmmIdentityDependencies> = {},
+  lockDirectory = DEVICE_ACL_LOCK_DIRECTORY,
+): Promise<T> {
+  const resolvedDependencies = { ...defaultDependencies, ...dependencies };
+  if (!dependencies.processStartTime && dependencies.readFile) {
+    resolvedDependencies.processStartTime = (pid) =>
+      readProcessStartTime(pid, resolvedDependencies.readFile);
+  }
+  const manager = new CloudHypervisorVmmIdentityManager(
+    'device-acl-recovery',
+    tools,
+    resolvedDependencies,
+  );
+  return manager.withDeviceAclLock(operation, lockDirectory);
+}
+
 export function createAccountName(): string {
   return `${ACCOUNT_PREFIX}${randomBytes(10).toString('hex')}`;
 }
@@ -449,7 +488,8 @@ export const cloudHypervisorVmmIdentityTestHelpers = {
 
 async function readProcessStartTime(
   pid: number,
-  readFile: typeof fs.readFile = fs.readFile,
+  readFile: (filePath: string, encoding: 'utf8') => Promise<string> =
+    (filePath, encoding) => fs.readFile(filePath, encoding),
 ): Promise<string | undefined> {
   try {
     const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
@@ -463,7 +503,7 @@ async function readProcessStartTime(
 function parseProcessStatStartTime(stat: string): string | undefined {
   const close = stat.lastIndexOf(')');
   const fields = stat.slice(close + 2).split(' ');
-  return fields[19];
+  return fields[19]?.trim();
 }
 
 function parsePositiveInteger(value: string, label: string): number {
