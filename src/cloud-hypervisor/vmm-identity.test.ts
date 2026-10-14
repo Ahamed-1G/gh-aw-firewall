@@ -19,7 +19,10 @@ const tools: CloudHypervisorVmmIdentityToolPaths = {
 const baselineAcl = ['user::rw-', 'group::rw-', 'other::rw-'];
 const restoredAclArgument = `--set=${baselineAcl.join(',')}`;
 
-function dependencies(overrides: Partial<CloudHypervisorVmmIdentityDependencies> = {}) {
+function dependencies(
+  overrides: Partial<CloudHypervisorVmmIdentityDependencies> = {},
+  userdelRemovesGroup = true,
+) {
   let lockExists = false;
   let accountExists = false;
   let groupExists = false;
@@ -35,7 +38,7 @@ function dependencies(overrides: Partial<CloudHypervisorVmmIdentityDependencies>
     }
     if (command === tools.userdel) {
       accountExists = false;
-      groupExists = false;
+      if (userdelRemovesGroup) groupExists = false;
       return { stdout: '', stderr: '' };
     }
     if (command === tools.groupdel) {
@@ -109,6 +112,122 @@ function dependencies(overrides: Partial<CloudHypervisorVmmIdentityDependencies>
   return { deps, run };
 }
 
+type CleanupFailure = 'userdel' | 'groupdel' | 'group-probe' | 'dual';
+
+async function cleanupFailureScenario(failure: CleanupFailure) {
+  const runnerBaseline = [
+    'user::rw-',
+    'user:1001:rw-',
+    'group::rw-',
+    'mask::rw-',
+    'other::rw-',
+  ];
+  let currentAcl = [...runnerBaseline];
+  let accountExists = false;
+  let groupExists = false;
+  let accountName = '';
+  let deletionStarted = false;
+  let restorationAttempts = 0;
+  const observer = {
+    prepareAccount: jest.fn().mockResolvedValue(undefined),
+    captureIdentity: jest.fn().mockResolvedValue(undefined),
+    prepareAcl: jest.fn().mockResolvedValue(undefined),
+    releaseAcl: jest.fn().mockResolvedValue(undefined),
+  };
+  const base = dependencies();
+  base.deps.run = jest.fn(async (command, args) => {
+    if (command === tools.useradd) {
+      accountExists = true;
+      groupExists = true;
+      accountName = args[args.length - 1];
+      return { stdout: '', stderr: '' };
+    }
+    if (command === tools.id) {
+      if (!accountExists) {
+        throw Object.assign(new Error('missing account'), { exitCode: 1 });
+      }
+      if (args[0] === '-u') return { stdout: '23001\n', stderr: '' };
+      if (args[0] === '-g') return { stdout: '23002\n', stderr: '' };
+      return { stdout: '23002\n', stderr: '' };
+    }
+    if (command === tools.getent && args[0] === 'passwd') {
+      if (!accountExists) {
+        throw Object.assign(new Error('missing account'), { exitCode: 2 });
+      }
+      return {
+        stdout: `${accountName}:x:23001:23002:AWF Cloud Hypervisor:/nonexistent:/usr/sbin/nologin\n`,
+        stderr: '',
+      };
+    }
+    if (command === tools.getent && args[0] === 'group') {
+      if (failure === 'group-probe' && deletionStarted) {
+        throw new Error('group existence probe failed');
+      }
+      if (!groupExists) {
+        throw Object.assign(new Error('missing group'), { exitCode: 2 });
+      }
+      return { stdout: `${accountName}:x:23002:\n`, stderr: '' };
+    }
+    if (command === tools.getfacl) {
+      return { stdout: `${currentAcl.join('\n')}\n`, stderr: '' };
+    }
+    if (command === tools.setfacl && args[0] === '--modify') {
+      currentAcl = [
+        'user::rw-',
+        'user:1001:rw-',
+        'user:23001:rw-',
+        'group::rw-',
+        'mask::rw-',
+        'other::rw-',
+      ];
+      return { stdout: '', stderr: '' };
+    }
+    if (command === tools.setfacl) {
+      restorationAttempts += 1;
+      if (failure === 'dual' && restorationAttempts === 3) {
+        throw new Error('final setfacl failed');
+      }
+      currentAcl = [...runnerBaseline];
+      return { stdout: '', stderr: '' };
+    }
+    if (command === tools.userdel) {
+      deletionStarted = true;
+      accountExists = false;
+      currentAcl = ['user::rw-', 'group::rw-', 'mask::rw-', 'other::rw-'];
+      if (failure === 'userdel' || failure === 'dual') {
+        throw new Error('userdel failed after mutation');
+      }
+      return { stdout: '', stderr: '' };
+    }
+    if (command === tools.groupdel) {
+      groupExists = false;
+      if (failure === 'groupdel') {
+        throw new Error('groupdel failed after mutation');
+      }
+      return { stdout: '', stderr: '' };
+    }
+    if (command === tools.ip) {
+      return { stdout: 'vmt123: tap persist user 23001 group 23002\n', stderr: '' };
+    }
+    throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+  });
+  const manager = new CloudHypervisorVmmIdentityManager(
+    `cleanup-${failure}`,
+    tools,
+    base.deps,
+    observer,
+  );
+  await manager.allocate();
+  await manager.withDeviceAccess(async () => undefined, false);
+  return {
+    manager,
+    observer,
+    runnerBaseline,
+    currentAcl: () => currentAcl,
+    restorationAttempts: () => restorationAttempts,
+  };
+}
+
 describe('CloudHypervisorVmmIdentityManager', () => {
   it('creates a no-login system account, validates resources, grants ACLs, and removes exact state', async () => {
     const { deps, run } = dependencies();
@@ -157,7 +276,7 @@ describe('CloudHypervisorVmmIdentityManager', () => {
         .toBeLessThan(operation.mock.invocationCallOrder[0]);
       expect(operation.mock.invocationCallOrder[0])
         .toBeLessThan(run.mock.invocationCallOrder[revokeCall]);
-      expect(observer.releaseAcl).toHaveBeenCalledWith(devicePath);
+      expect(observer.releaseAcl).not.toHaveBeenCalledWith(devicePath);
     }
     expect(run).toHaveBeenCalledWith(
       tools.setfacl,
@@ -169,6 +288,9 @@ describe('CloudHypervisorVmmIdentityManager', () => {
     );
 
     await manager.cleanup();
+    for (const devicePath of ['/dev/kvm', '/dev/net/tun']) {
+      expect(observer.releaseAcl).toHaveBeenCalledWith(devicePath);
+    }
     expect(run).toHaveBeenCalledWith(tools.userdel, [identity.name]);
     expect(run).not.toHaveBeenCalledWith(tools.groupdel, [identity.name]);
     expect(run).toHaveBeenCalledWith(
@@ -179,6 +301,227 @@ describe('CloudHypervisorVmmIdentityManager', () => {
       tools.setfacl,
       [restoredAclArgument, '/dev/net/tun'],
     );
+  });
+
+  it('preserves a distinct runner KVM ACE through locked account and group deletion', async () => {
+    const runnerBaseline = [
+      'user::rw-',
+      'user:1001:rw-',
+      'group::rw-',
+      'mask::rw-',
+      'other::rw-',
+    ];
+    let currentAcl = [...runnerBaseline];
+    let accountExists = false;
+    let groupExists = false;
+    let accountName = '';
+    let deviceLockHeld = false;
+    const observer = {
+      prepareAccount: jest.fn().mockResolvedValue(undefined),
+      captureIdentity: jest.fn().mockResolvedValue(undefined),
+      prepareAcl: jest.fn().mockResolvedValue(undefined),
+      releaseAcl: jest.fn().mockResolvedValue(undefined),
+    };
+    const base = dependencies();
+    const originalMkdir = base.deps.mkdir;
+    const originalRm = base.deps.rm;
+    base.deps.mkdir = jest.fn(async (directory, options) => {
+      await originalMkdir(directory, options);
+      if (directory.endsWith('.device-acl-lock')) deviceLockHeld = true;
+    });
+    base.deps.rm = jest.fn(async (directory, options) => {
+      await originalRm(directory, options);
+      if (directory.endsWith('.device-acl-lock')) deviceLockHeld = false;
+    });
+    const lockedCommands: string[] = [];
+    base.deps.run = jest.fn(async (command, args) => {
+      if (command === tools.useradd) {
+        accountExists = true;
+        groupExists = true;
+        accountName = args[args.length - 1];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.id) {
+        if (!accountExists) throw Object.assign(new Error('missing account'), { exitCode: 1 });
+        if (args[0] === '-u') return { stdout: '23001\n', stderr: '' };
+        if (args[0] === '-g') return { stdout: '23002\n', stderr: '' };
+        return { stdout: '23002\n', stderr: '' };
+      }
+      if (command === tools.getent && args[0] === 'passwd') {
+        if (!accountExists) throw Object.assign(new Error('missing account'), { exitCode: 2 });
+        return {
+          stdout: `${accountName}:x:23001:23002:AWF Cloud Hypervisor:/nonexistent:/usr/sbin/nologin\n`,
+          stderr: '',
+        };
+      }
+      if (command === tools.getent && args[0] === 'group') {
+        if (!groupExists) throw Object.assign(new Error('missing group'), { exitCode: 2 });
+        return { stdout: `${accountName}:x:23002:\n`, stderr: '' };
+      }
+      if (command === tools.getfacl) {
+        if (deviceLockHeld) lockedCommands.push('getfacl');
+        return { stdout: `${currentAcl.join('\n')}\n`, stderr: '' };
+      }
+      if (command === tools.setfacl && args[0] === '--modify') {
+        currentAcl = [
+          'user::rw-',
+          'user:1001:rw-',
+          'user:23001:rw-',
+          'group::rw-',
+          'mask::rw-',
+          'other::rw-',
+        ];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.setfacl) {
+        expect(deviceLockHeld).toBe(true);
+        lockedCommands.push('setfacl');
+        currentAcl = [...runnerBaseline];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.userdel) {
+        expect(deviceLockHeld).toBe(true);
+        lockedCommands.push('userdel');
+        accountExists = false;
+        currentAcl = ['user::rw-', 'group::rw-', 'mask::rw-', 'other::rw-'];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.groupdel) {
+        expect(deviceLockHeld).toBe(true);
+        lockedCommands.push('groupdel');
+        groupExists = false;
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.ip) {
+        return { stdout: 'vmt123: tap persist user 23001 group 23002\n', stderr: '' };
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+    const manager = new CloudHypervisorVmmIdentityManager(
+      'runner-ace',
+      tools,
+      base.deps,
+      observer,
+    );
+
+    await manager.allocate();
+    await manager.withDeviceAccess(async () => undefined, false);
+    expect(observer.releaseAcl).not.toHaveBeenCalled();
+    lockedCommands.length = 0;
+    await manager.cleanup();
+
+    expect(currentAcl).toEqual(runnerBaseline);
+    expect(lockedCommands).toEqual([
+      'setfacl', 'getfacl',
+      'userdel', 'groupdel',
+      'setfacl', 'getfacl',
+    ]);
+    expect(observer.releaseAcl).toHaveBeenCalledWith('/dev/kvm');
+    expect(deviceLockHeld).toBe(false);
+  });
+
+  it('fails closed on a same-length final ACL mismatch after account deletion', async () => {
+    const runnerBaseline = [
+      'user::rw-',
+      'user:1001:rw-',
+      'group::rw-',
+      'mask::rw-',
+      'other::rw-',
+    ];
+    let restorationCount = 0;
+    let accountDeleted = false;
+    let currentAcl = [...runnerBaseline];
+    const observer = {
+      prepareAccount: jest.fn().mockResolvedValue(undefined),
+      captureIdentity: jest.fn().mockResolvedValue(undefined),
+      prepareAcl: jest.fn().mockResolvedValue(undefined),
+      releaseAcl: jest.fn().mockResolvedValue(undefined),
+    };
+    const base = dependencies();
+    const originalRun = base.deps.run;
+    base.deps.run = jest.fn(async (command, args) => {
+      if (command === tools.getfacl) {
+        if (accountDeleted && restorationCount >= 2) {
+          return {
+            stdout: 'user::rw-\nuser:1002:rw-\ngroup::rw-\nmask::rw-\nother::rw-\n',
+            stderr: '',
+          };
+        }
+        return { stdout: `${currentAcl.join('\n')}\n`, stderr: '' };
+      }
+      if (command === tools.setfacl && args[0] === '--modify') {
+        currentAcl = [
+          'user::rw-',
+          'user:1001:rw-',
+          'user:23001:rw-',
+          'group::rw-',
+          'mask::rw-',
+          'other::rw-',
+        ];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.setfacl && args[0].startsWith('--set=')) {
+        restorationCount += 1;
+        currentAcl = [...runnerBaseline];
+        return { stdout: '', stderr: '' };
+      }
+      if (command === tools.userdel) accountDeleted = true;
+      return originalRun(command, args);
+    });
+    const manager = new CloudHypervisorVmmIdentityManager(
+      'same-length-mismatch',
+      tools,
+      base.deps,
+      observer,
+    );
+
+    await manager.allocate();
+    await manager.withDeviceAccess(async () => undefined, false);
+    await expect(manager.cleanup()).rejects.toThrow(
+      /before=user::rw-,user:<id>:rw-,group::rw-,mask::rw-,other::rw-.*after=user::rw-,user:<id>:rw-,group::rw-,mask::rw-,other::rw-/,
+    );
+    expect(restorationCount).toBe(3);
+    expect(observer.releaseAcl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['userdel', /userdel failed after mutation/],
+    ['groupdel', /groupdel failed after mutation/],
+    ['group-probe', /group existence probe failed/],
+  ] as const)(
+    'reapplies the exact baseline and retains durable intent after %s failure',
+    async (failure, expectedError) => {
+      const scenario = await cleanupFailureScenario(failure);
+
+      await expect(scenario.manager.cleanup()).rejects.toThrow(expectedError);
+      expect(scenario.restorationAttempts()).toBe(3);
+      expect(scenario.currentAcl()).toEqual(scenario.runnerBaseline);
+      expect(scenario.observer.releaseAcl).not.toHaveBeenCalled();
+    },
+  );
+
+  it('aggregates deletion and final restoration failures without releasing durable intent', async () => {
+    const scenario = await cleanupFailureScenario('dual');
+
+    await expect(scenario.manager.cleanup()).rejects.toThrow(
+      /userdel failed after mutation.*final ACL restoration also failed:.*final setfacl failed/,
+    );
+    expect(scenario.restorationAttempts()).toBe(3);
+    expect(scenario.observer.releaseAcl).not.toHaveBeenCalled();
+  });
+
+  it('propagates account existence probe failures instead of treating them as absence', async () => {
+    const base = dependencies();
+    base.deps.run = jest.fn(async (command) => {
+      if (command === tools.id) throw new Error('account existence probe failed');
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    await expect(new CloudHypervisorVmmIdentityManager(
+      'account-probe',
+      tools,
+      base.deps,
+    ).allocate()).rejects.toThrow(/account existence probe failed/);
   });
 
   it('does not grant TAP device access for a no-network VM', async () => {
@@ -385,12 +728,7 @@ describe('CloudHypervisorVmmIdentityManager', () => {
   });
 
   it('removes a residual private group when userdel leaves it behind', async () => {
-    const base = dependencies();
-    const originalRun = base.deps.run;
-    base.deps.run = jest.fn(async (command, args) => {
-      if (command === tools.userdel) return { stdout: '', stderr: '' };
-      return originalRun(command, args);
-    });
+    const base = dependencies({}, false);
     const manager = new CloudHypervisorVmmIdentityManager('residual-group', tools, base.deps);
     const identity = await manager.allocate();
 
