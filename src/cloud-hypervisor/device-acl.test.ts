@@ -1,4 +1,5 @@
 import {
+  composeDeviceAcl,
   deviceAclArgument,
   describeDeviceAclShape,
   parseDeviceAcl,
@@ -46,6 +47,90 @@ describe('Cloud Hypervisor device ACLs', () => {
     expect(parseDeviceAcl(
       'user::rw-\ngroup::rw-\nmask::rw-\nother::rw-\n',
     )).toEqual(['user::rw-', 'group::rw-', 'mask::rw-', 'other::rw-']);
+  });
+
+  it.each([
+    {
+      name: 'earlier identity cleans first',
+      baseline: [
+        'user::rw-', 'user:1001:rw-', 'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      current: [
+        'user::rw-', 'user:997:rw-', 'user:999:rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      ownerUid: 999,
+      capturedTemporaryUids: [],
+      liveTemporaryUids: [997, 999],
+      expected: [
+        'user::rw-', 'user:997:rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+    },
+    {
+      name: 'later identity cleans after its captured peer is gone',
+      baseline: [
+        'user::rw-', 'user:999:rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      current: [
+        'user::rw-', 'user:997:rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      ownerUid: 997,
+      capturedTemporaryUids: [999],
+      liveTemporaryUids: [997],
+      expected: [
+        'user::rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+    },
+  ])('composes overlapping baselines when $name', ({
+    baseline,
+    current,
+    ownerUid,
+    capturedTemporaryUids,
+    liveTemporaryUids,
+    expected,
+  }) => {
+    expect(composeDeviceAcl(
+      baseline,
+      current,
+      ownerUid,
+      capturedTemporaryUids,
+      liveTemporaryUids,
+    )).toEqual(expected);
+  });
+
+  it('adds a live peer mask to a baseline that had no named entries', () => {
+    expect(composeDeviceAcl(
+      ['user::rw-', 'group::r--', 'other::---'],
+      [
+        'user::rw-', 'user:997:rw-', 'user:999:rw-',
+        'group::r--', 'mask::rw-', 'other::---',
+      ],
+      999,
+      [],
+      [997, 999],
+    )).toEqual([
+      'user::rw-', 'user:997:rw-', 'group::r--', 'mask::rw-', 'other::---',
+    ]);
+  });
+
+  it('rejects a named ACE that is neither durable nor a live VMM peer', () => {
+    expect(() => composeDeviceAcl(
+      [
+        'user::rw-', 'user:1001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      [
+        'user::rw-', 'user:1001:rw-', 'user:2001:rw-',
+        'group::rw-', 'mask::rw-', 'other::---',
+      ],
+      999,
+      [],
+      [],
+    )).toThrow(/unowned user ACE: 2001/);
   });
 
   it.each([

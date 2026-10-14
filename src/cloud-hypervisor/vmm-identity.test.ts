@@ -2,6 +2,7 @@ import {
   CloudHypervisorVmmIdentityManager,
   cloudHypervisorVmmIdentityTestHelpers,
   createAccountName,
+  resolveTemporaryVmmAclUids,
   type CloudHypervisorVmmIdentityDependencies,
   type CloudHypervisorVmmIdentityToolPaths,
 } from './vmm-identity';
@@ -18,6 +19,122 @@ const tools: CloudHypervisorVmmIdentityToolPaths = {
 };
 const baselineAcl = ['user::rw-', 'group::rw-', 'other::rw-'];
 const restoredAclArgument = `--set=${baselineAcl.join(',')}`;
+
+describe('temporary VMM ACL identity classification', () => {
+  const entry = ['user::rw-', 'user:2001:rw-', 'group::rw-', 'mask::rw-', 'other::---'];
+
+  it('ignores similarly prefixed accounts that are not exact AWF VMM identities', async () => {
+    const run = jest.fn().mockResolvedValue({
+      stdout: 'awfvmm-backup:x:2001:2002:AWF Cloud Hypervisor backup:' +
+        '/nonexistent:/usr/sbin/nologin\n',
+      stderr: '',
+    });
+
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run)).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['returned not found', async () => ({ exitCode: 2, stdout: '', stderr: '' })],
+    ['threw not found', async () => {
+      throw Object.assign(new Error('missing'), { exitCode: 2 });
+    }],
+  ])('ignores an ACL uid whose passwd lookup %s', async (_name, run) => {
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run)).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['returns an error', async () => ({ exitCode: 1, stdout: '', stderr: 'denied' })],
+    ['throws an error', async () => {
+      throw new Error('lookup failed');
+    }],
+  ])('fails closed when passwd lookup %s', async (_name, run) => {
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run)).rejects.toThrow(
+      /denied|lookup failed/,
+    );
+  });
+
+  it('rejects an exact VMM account whose numeric passwd identity changed', async () => {
+    const run = jest.fn().mockResolvedValue({
+      stdout: 'awfvmm-0123456789abcdef0123:x:2002:2003:' +
+        'AWF Cloud Hypervisor run:/nonexistent:/usr/sbin/nologin\n',
+      stderr: '',
+    });
+
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run))
+      .rejects.toThrow(/account uid changed/);
+  });
+
+  it('fails closed when exact VMM account validation fails', async () => {
+    const name = 'awfvmm-0123456789abcdef0123';
+    const run = jest.fn(async (command: string, args: readonly string[]) => {
+      if (command === tools.getent && args[1] === '2001') {
+        return {
+          stdout: `${name}:x:2001:2002:invalid:/nonexistent:/usr/sbin/nologin\n`,
+          stderr: '',
+        };
+      }
+      if (command === tools.id && args[0] === '-u') {
+        return { exitCode: 1, stdout: '', stderr: 'id denied' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run))
+      .rejects.toThrow(/id denied/);
+  });
+
+  it('rejects an exact VMM account without the AWF comment marker', async () => {
+    const name = 'awfvmm-0123456789abcdef0123';
+    const run = jest.fn(async (command: string, args: readonly string[]) => {
+      if (command === tools.getent) {
+        return {
+          stdout: `${name}:x:2001:2002:invalid:/nonexistent:/usr/sbin/nologin\n`,
+          stderr: '',
+        };
+      }
+      if (command === tools.id && args[0] === '-u') return { stdout: '2001\n', stderr: '' };
+      if (command === tools.id && args[0] === '-g') return { stdout: '2002\n', stderr: '' };
+      if (command === tools.id && args[0] === '-G') return { stdout: '2002\n', stderr: '' };
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run))
+      .rejects.toThrow(/unsafe passwd state/);
+  });
+
+  it('rejects an exact VMM account whose resolved uid differs from its ACL uid', async () => {
+    const name = 'awfvmm-0123456789abcdef0123';
+    const run = jest.fn(async (command: string, args: readonly string[]) => {
+      if (command === tools.getent && args[1] === '2001') {
+        return {
+          stdout: `${name}:x:2001:2002:AWF Cloud Hypervisor run:` +
+            '/nonexistent:/usr/sbin/nologin\n',
+          stderr: '',
+        };
+      }
+      if (command === tools.id && args[0] === '-u') {
+        return { stdout: '2002\n', stderr: '' };
+      }
+      if (command === tools.id && args[0] === '-g') {
+        return { stdout: '2003\n', stderr: '' };
+      }
+      if (command === tools.id && args[0] === '-G') {
+        return { stdout: '2003\n', stderr: '' };
+      }
+      if (command === tools.getent && args[1] === name) {
+        return {
+          stdout: `${name}:x:2002:2003:AWF Cloud Hypervisor run:` +
+            '/nonexistent:/usr/sbin/nologin\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(resolveTemporaryVmmAclUids(entry, tools, run))
+      .rejects.toThrow(/account uid changed/);
+  });
+});
 
 function dependencies(
   overrides: Partial<CloudHypervisorVmmIdentityDependencies> = {},
@@ -67,6 +184,9 @@ function dependencies(
       if (args[0] === 'group') {
         if (!groupExists) throw Object.assign(new Error('missing group'), { exitCode: 2 });
         return { stdout: `${accountName}:x:23002:\n`, stderr: '' };
+      }
+      if (/^\d+$/.test(args[1]) && args[1] !== '23001') {
+        throw Object.assign(new Error('missing account'), { exitCode: 2 });
       }
       return {
         stdout: `${accountName}:x:23001:23002:AWF Cloud Hypervisor:/nonexistent:/usr/sbin/nologin\n`,
@@ -151,6 +271,9 @@ async function cleanupFailureScenario(failure: CleanupFailure) {
       return { stdout: '23002\n', stderr: '' };
     }
     if (command === tools.getent && args[0] === 'passwd') {
+      if (/^\d+$/.test(args[1]) && args[1] !== '23001') {
+        throw Object.assign(new Error('missing account'), { exitCode: 2 });
+      }
       if (!accountExists) {
         throw Object.assign(new Error('missing account'), { exitCode: 2 });
       }
@@ -229,6 +352,20 @@ async function cleanupFailureScenario(failure: CleanupFailure) {
 }
 
 describe('CloudHypervisorVmmIdentityManager', () => {
+  it('does not classify similarly prefixed non-AWF accounts as temporary VMM identities', async () => {
+    const run = jest.fn(async () => ({
+      stdout: 'awfvmm-backup:x:23003:23002:AWF Cloud Hypervisor:/nonexistent:/usr/sbin/nologin\n',
+      stderr: '',
+    }));
+
+    await expect(resolveTemporaryVmmAclUids(
+      ['user:23003:rw-'],
+      tools,
+      run,
+    )).resolves.toEqual([]);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it('creates a no-login system account, validates resources, grants ACLs, and removes exact state', async () => {
     const { deps, run } = dependencies();
     const observer = {
@@ -348,6 +485,9 @@ describe('CloudHypervisorVmmIdentityManager', () => {
         return { stdout: '23002\n', stderr: '' };
       }
       if (command === tools.getent && args[0] === 'passwd') {
+        if (/^\d+$/.test(args[1]) && args[1] !== '23001') {
+          throw Object.assign(new Error('missing account'), { exitCode: 2 });
+        }
         if (!accountExists) throw Object.assign(new Error('missing account'), { exitCode: 2 });
         return {
           stdout: `${accountName}:x:23001:23002:AWF Cloud Hypervisor:/nonexistent:/usr/sbin/nologin\n`,
@@ -412,7 +552,7 @@ describe('CloudHypervisorVmmIdentityManager', () => {
 
     expect(currentAcl).toEqual(runnerBaseline);
     expect(lockedCommands).toEqual([
-      'setfacl', 'getfacl',
+      'getfacl', 'setfacl', 'getfacl',
       'userdel', 'groupdel',
       'setfacl', 'getfacl',
     ]);
