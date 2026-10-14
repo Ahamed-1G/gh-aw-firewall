@@ -60,9 +60,12 @@ export function composeDeviceAcl(
   ownerUid: number,
   capturedTemporaryUids: readonly number[],
   liveTemporaryUids: readonly number[],
+  accessedBaseline: readonly string[] = baseline,
+  accessedTemporaryUids: readonly number[] = capturedTemporaryUids,
 ): string[] {
   parseDeviceAcl(baseline.join('\n'));
   parseDeviceAcl(current.join('\n'));
+  parseDeviceAcl(accessedBaseline.join('\n'));
   const capturedTemporary = new Set(capturedTemporaryUids);
   const liveTemporary = new Set(liveTemporaryUids);
   capturedTemporary.add(ownerUid);
@@ -76,6 +79,14 @@ export function composeDeviceAcl(
   for (const entry of durable) {
     const uid = namedUserAclUid(entry);
     if (uid !== undefined) durableNamedUsers.set(uid, entry);
+  }
+  const accessedTemporary = new Set(accessedTemporaryUids);
+  accessedTemporary.add(ownerUid);
+  for (const entry of accessedBaseline) {
+    const uid = namedUserAclUid(entry);
+    if (uid !== undefined && !accessedTemporary.has(uid) && !durableNamedUsers.has(uid)) {
+      durableNamedUsers.set(uid, entry);
+    }
   }
   const temporaryNamedUsers = new Map<number, string>();
   for (const entry of current) {
@@ -103,13 +114,17 @@ export function composeDeviceAcl(
     ...withoutNamedUsers.slice(ownerIndex + 1),
   ];
 
-  if (temporaryNamedUsers.size > 0) {
-    const currentMask = current.find((entry) => entry.startsWith('mask::'))!;
+  if (temporaryNamedUsers.size > 0 || durableNamedUsers.size > 0) {
+    const baselineMask = baseline.find((entry) => entry.startsWith('mask::'));
+    const requiredMask = temporaryNamedUsers.size > 0
+      ? current.find((entry) => entry.startsWith('mask::'))!
+      : baselineMask ??
+        accessedBaseline.find((entry) => entry.startsWith('mask::'))!;
     const maskIndex = composed.findIndex((entry) => entry.startsWith('mask::'));
-    if (maskIndex >= 0) composed[maskIndex] = currentMask;
+    if (maskIndex >= 0) composed[maskIndex] = requiredMask;
     else {
       const otherIndex = composed.findIndex((entry) => entry.startsWith('other::'));
-      composed.splice(otherIndex, 0, currentMask);
+      composed.splice(otherIndex, 0, requiredMask);
     }
   }
   return parseDeviceAcl(composed.join('\n'));
