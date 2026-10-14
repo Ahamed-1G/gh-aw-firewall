@@ -99,6 +99,7 @@ function evidence(campaign = manifest(), sampleIndex = 0) {
       workflowRunId: 'run-1',
       jobId: 'canary',
       workflowAttemptId: '1',
+      runnerImage: 'ubuntu24/20261005.85',
     },
     lifecycle: {
       artifactPreflightStartedMs: 100,
@@ -177,6 +178,7 @@ describe('matched runtime measurement adapter', () => {
       cpuSeconds: 1.25,
       resourceProfile: 'default',
       cachePreparation: 'cold-cache-flushed',
+      runnerImage: 'ubuntu24/20261005.85',
       success: true,
     });
     expect(artifact.result.apiProxyRequests).toBe(3);
@@ -492,6 +494,7 @@ describe('matched runtime measurement adapter', () => {
         workflowRunId: 'run',
         jobId: 'recovery',
         workflowAttemptId: '1',
+        runnerImage: 'ubuntu24/20261005.85',
         toolchainPath,
       },
       measurement,
@@ -501,6 +504,7 @@ describe('matched runtime measurement adapter', () => {
       kind: 'recovery',
       result: {
         evidenceKind: 'measured',
+        runnerImage: 'ubuntu24/20261005.85',
         success: true,
         durationMs: 1234,
         managerKilledAfterCleanupRecord: true,
@@ -522,6 +526,7 @@ describe('matched runtime measurement adapter', () => {
           workflowRunId: 'run',
           jobId: 'recovery',
           workflowAttemptId: '1',
+          runnerImage: 'ubuntu24/20261005.85',
           toolchainPath,
         },
         incomplete,
