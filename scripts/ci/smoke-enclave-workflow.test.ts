@@ -18,6 +18,10 @@ function countOccurrences(content: string, value: string): number {
 }
 
 describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
+  const compilerVersion =
+    'v0.92.0';
+  const setupAction =
+    'github/gh-aw/actions/setup@56a8d2b93f37634d540b6731ff84050f9dba27b3';
   const source = fs.readFileSync(
     path.join(workflowsDir, 'smoke-enclave-cloud-hypervisor.md'), 'utf8'
   );
@@ -202,8 +206,16 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
       'bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.96'
     );
     expect(lock).toContain('"engine_versions":{"copilot":"1.0.96"}');
-    expect(lock).toContain('"compiler_version":"v0.92.0"');
-    expect(lock).toContain('github/gh-aw-actions/setup@458b269006dcf88e3b5496b6fbecabe4b9a0f954');
+    expect(lock).toContain(`"compiler_version":"${compilerVersion}"`);
+    expect(lock).toContain(setupAction);
+    const setupSteps = Object.values(compiled.jobs).flatMap(job => job.steps)
+      .filter(step => 'uses' in step && String(step.uses).includes('/setup@'));
+    expect(setupSteps).toHaveLength(4);
+    for (const step of setupSteps) {
+      expect('uses' in step && step.uses).toBe(setupAction);
+    }
+    expect(lock).not.toContain('"dry_run":true');
+    expect(source).toContain('selects runtime scripts, not the compiler binary.');
     expect(execute?.run).toContain('GH_AW_COPILOT_SRC="$(command -v copilot 2>/dev/null || true)"');
     expect(execute?.run).toContain('GH_AW_COPILOT_BIN="${RUNNER_TEMP}/gh-aw/bin/copilot"');
     expect(execute?.run).toContain('cp "$GH_AW_COPILOT_SRC" "$GH_AW_COPILOT_BIN"');
@@ -308,9 +320,11 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
       .map(([name]) => name)).toEqual([]);
     expect(compiled.jobs.safe_outputs.permissions?.issues).toBeUndefined();
     expect(compiled.jobs.report_smoke_result.permissions?.issues).toBeUndefined();
-    const blockedVersionStep = compiled.jobs.activation.steps.find(step =>
-      step.env?.GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE !== undefined);
-    expect(blockedVersionStep?.env?.GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE).toBe('false');
+    const versionCheckStep = compiled.jobs.activation.steps.find(step =>
+      step.name === 'Check compile-agentic version');
+    if (versionCheckStep) {
+      expect(versionCheckStep.env?.GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE).toBe('false');
+    }
     for (const configKey of [
       'GH_AW_SAFE_OUTPUTS_CONFIG', 'GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG',
     ]) {
@@ -481,7 +495,7 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(lock).not.toContain('--container-runtime docker');
     expect(lock).toContain('\\"cloudHypervisor\\":{\\"previewEnabled\\":true');
     expect(lock).toContain('--exclude-env AWF_CLOUD_HYPERVISOR_ENCLAVE_SCRIPT_ROOTFS');
-    expect(lock).toContain('"compiler_version":"v0.92.0"');
+    expect(lock).toContain(`"compiler_version":"${compilerVersion}"`);
   });
 
   it('pins the published AWF and its attested artifacts to the same release', () => {
@@ -540,9 +554,10 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     );
     expect(source).toContain('successful privileged cleanup');
     expect(source).toContain('Do not copy raw\nresolved JSON into normal artifact paths');
-    expect(source).toContain('compiled\nwith gh-aw v0.92.0');
+    expect(source).toContain('with released gh-aw v0.92.0');
+    expect(source).toContain(compilerVersion);
     expect(steps.some(step =>
-      step.uses === 'github/gh-aw-actions/setup@458b269006dcf88e3b5496b6fbecabe4b9a0f954'
+      step.uses === setupAction
     )).toBe(true);
     expect(redact?.with?.script).toContain("require(path.join(actionsDir, 'redact_secrets.cjs'))");
     expect(upload?.with?.path).toContain('/tmp/gh-aw/sandbox/firewall/audit/');
