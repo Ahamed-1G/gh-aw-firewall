@@ -169,6 +169,64 @@ the record and resources for diagnosis. The record is removed only after normal
 teardown succeeds. `--keep-containers` is an explicit diagnostic opt-out: its
 record is removed while the requested resources remain preserved.
 
+### Public-fixture enclave debugging
+
+Enclave raw stdout/stderr is discarded by default. For **public test fixtures
+only**, add `--cloud-hypervisor-enclave-debug-public` to the trusted host AWF
+invocation, or set this top-level configuration alongside the existing enclave
+and attested Cloud Hypervisor configuration:
+
+```json
+{
+  "cloudHypervisor": {
+    "previewEnabled": true,
+    "enclaveDebugPublic": true
+  }
+}
+```
+
+This opt-in does not open any production rollout gate or enable a different
+runtime. Every configured repository must have `sensitivity: "public"`. AWF also
+checks GitHub's repository metadata **without credentials**, rejects redirects,
+and requires matching repository identity, `private: false`, and
+`visibility: "public"`. Each check has a five-second timeout and a 64 KiB
+response ceiling; unavailable, rate-limited, malformed, private, or unverified
+metadata prevents launch. The host needs HTTPS access to `api.github.com`.
+Dynamic repository admission, non-public sensitivities (including `trusted`),
+custom enclave images, unattested development artifacts, and non-Cloud-Hypervisor
+executors are rejected. A guest request, payload, or environment variable cannot
+enable capture.
+
+Artifacts persist outside the work directory under
+`/var/lib/awf-cloud-hypervisor/debug-artifacts/cloud-hypervisor/<opaque-invocation-id>/`.
+AWF checks this root against primary-agent mounts and actual virtio-fs exports,
+on every startup regardless of the current debug flag or runtime, and never
+mounts it in the primary agent, broker, or enclave. The protected directory
+chain and artifacts are root-owned; directories are `0700`, regular single-link
+files are `0600`, and symlink destinations are rejected. They are **not** copied into ordinary
+audit/log collections or widened for upload. Inspect them on the host and remove
+the specific invocation directory when no longer needed.
+
+Capture retains the trailing **1 MiB per raw stream/file**, not an unlimited
+transcript: guest stdout/stderr, launcher stdout/stderr, serial/VMM logs, and
+available virtiofs logs. Existing VM, network and confinement metadata accompany
+the logs. Collection runs before run-directory and network cleanup, including
+partial startup failure; an early termination/cleanup failure also attempts
+collection before propagating the failure. Missing/not-yet-created streams can
+be empty or absent. Once collected, cleanup retries do not overwrite the
+evidence. An artifact write failure is surfaced as an executor cleanup failure,
+not a successful invocation. Abrupt host termination/SIGKILL cannot guarantee
+collection; existing resource-recovery rules still apply.
+
+**Disclosure risk:** public repository visibility does not make raw output safe.
+Payloads, model responses, URLs, and incidental data may still contain secrets
+or other sensitive content. Use only synthetic public-fixture inputs, inspect
+artifacts before sharing, and do not upload them to broadly readable workflow
+artifacts. The flag changes only host diagnostics: structured results, finite
+schemas and disclosure budgets, invocation counts/deadlines, credential
+isolation, resource/confinement limits, and no-network script behavior are
+unchanged. Raw logs and error text are never returned to the primary agent.
+
 ### No-network script-enclave profile
 
 The script-enclave workload profile selects `network.mode: none`. Trusted
@@ -1288,7 +1346,7 @@ shared by AWF and the harness.
 | `startup` | Common lifecycle gates and overall readiness before primary-agent startup |
 | `enclave-runtime` / `enclave-storage` | Enabled runtime prerequisites and the private seed/storage/capability staging gates |
 | `gateway-attachment` / `gateway-handshake` | Compiler contract, container identity, network attachment/membership, and actual bounded MCP requests and tool contract |
-| `host-isolation` / `provider-selection` | Recovery-journal, invocation, and allocation-root isolation from primary-agent mounts; missing trusted storage provider |
+| `host-isolation` / `provider-selection` | Recovery-journal, invocation, allocation-root, and persistent debug-artifact isolation from primary-agent mounts; missing trusted storage provider |
 | `storage-admission` | Root UID, existing GitHub-hosted eligibility helper, Ubuntu distribution, effective mount capability, kernel tmpfs support, KVM access/device/open, writable cgroup hierarchy, and CPU/memory/PID controllers |
 | `bounded-runtime` | Configured role, mount/umount lookup, invocation directory trust, journaled aggregate storage allocation/mount/private-propagation/layout/verification, artifact configuration/trust/snapshot/attestation/digests/versions, each required host tool, platform/architecture, KVM access/group, root/kernel controls/cgroup v2, Docker daemon and Compose |
 | `artifact-snapshot` | Actual staging root validation, directory creation/identity capture, per-artifact copy and chmod, directory mode, mount intent/bind/identity capture, read-only executable remount, and sealed aggregate storage verification |

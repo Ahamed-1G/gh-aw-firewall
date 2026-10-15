@@ -13,6 +13,7 @@ import { HostPreflightReporter } from '../cloud-hypervisor/host-preflight-progre
 import type { HostExecutorInvocationPlan } from './host-executor-server';
 import * as cloudHypervisorManager from '../cloud-hypervisor/manager';
 import { ProductionTrustedCloudHypervisorEnclaveStorageProvider } from '../cloud-hypervisor/trusted-enclave-storage';
+import { ENCLAVE_DEBUG_ARTIFACT_ROOT } from './public-debug';
 import {
   assertCloudHypervisorEnclaveLifecycleReady,
   assertCloudHypervisorEnclavePrerequisites,
@@ -199,6 +200,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     expect(getEnclaveStartupProgress(config)).toMatchObject({
       stage: 'artifact-preflight', readiness: 'not-attempted', code: 'none',
     });
+
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
       runtimeDir: resolveEnclavePaths(workDir).hostExecutorDir,
       workDir: resolveEnclavePaths(workDir).workDir,
@@ -224,6 +226,66 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     await expect(startCloudHypervisorEnclaveLifecycle(config, provider, {}))
       .rejects.toThrow(/already exists/);
     await stopCloudHypervisorEnclaveLifecycle(config);
+  });
+
+  it.each([true, false])('verifies public fixtures before exposing a debug-enabled listener (public=%s)', async (isPublic) => {
+    config.cloudHypervisor!.enclaveDebugPublic = true;
+    config.enclaves!.privateRepos[0].sensitivity = 'public';
+    const paths = resolveEnclavePaths(workDir);
+    const seedMap = JSON.parse(fs.readFileSync(paths.seedMapPath, 'utf8'));
+    seedMap.seeds[0].sensitivity = 'public';
+    fs.writeFileSync(paths.seedMapPath, JSON.stringify(seedMap));
+    const request = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      full_name: repository.repo, private: !isPublic, visibility: isPublic ? 'public' : 'private',
+    })));
+    if (!isPublic) {
+      await expect(startCloudHypervisorEnclaveLifecycle(config, provider, {})).rejects.toThrow(/public/);
+      expect(provider.prepareRun).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } else {
+      await startCloudHypervisorEnclaveLifecycle(config, provider, {});
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        publicDebugArtifactDirectory: ENCLAVE_DEBUG_ARTIFACT_ROOT,
+        publicDebugArtifactProtectedRoot: path.dirname(path.dirname(ENCLAVE_DEBUG_ARTIFACT_ROOT)),
+      }));
+      expect(request.mock.invocationCallOrder[0])
+        .toBeLessThan((provider.prepareRun as jest.Mock).mock.invocationCallOrder[0]);
+      await stopCloudHypervisorEnclaveLifecycle(config);
+    }
+  });
+
+  it('tracks deferred public visibility verification for duplicate startup and shutdown', async () => {
+    config.cloudHypervisor!.enclaveDebugPublic = true;
+    config.enclaves!.privateRepos[0].sensitivity = 'public';
+    const paths = resolveEnclavePaths(workDir);
+    const seedMap = JSON.parse(fs.readFileSync(paths.seedMapPath, 'utf8'));
+    seedMap.seeds[0].sensitivity = 'public';
+    fs.writeFileSync(paths.seedMapPath, JSON.stringify(seedMap));
+    let resolveVisibility!: (response: Response) => void;
+    const request = jest.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      new Promise<Response>((resolve) => { resolveVisibility = resolve; }));
+
+    const startup = startCloudHypervisorEnclaveLifecycle(config, provider, {});
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(provider.prepareRun).not.toHaveBeenCalled();
+    await expect(startCloudHypervisorEnclaveLifecycle(config, provider, {})).rejects.toThrow(/already exists/);
+
+    let shutdownSettled = false;
+    const shutdown = stopCloudHypervisorEnclaveLifecycle(config).then(() => { shutdownSettled = true; });
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
+    expect(provider.prepareRun).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+
+    resolveVisibility(new Response(JSON.stringify({
+      full_name: repository.repo, private: false, visibility: 'public',
+    })));
+    await Promise.all([startup, shutdown]);
+    expect(provider.prepareRun).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(server.closeAdmissions).toHaveBeenCalled();
+    expect(server.close).toHaveBeenCalledTimes(1);
+    expect(storage.close).toHaveBeenCalledTimes(1);
   });
 
   it('keeps an allocation failure explicitly before gateway readiness', async () => {

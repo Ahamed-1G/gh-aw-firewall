@@ -42,6 +42,7 @@ import {
 } from './enclave-export-plan';
 import {
   CloudHypervisorManager,
+  resolveCloudHypervisorManagerDependencies,
 } from './manager';
 import type {
   CloudHypervisorManagerDependencies,
@@ -181,6 +182,8 @@ export async function createCloudHypervisorHostEnclaveExecutor(
       runState: options.runState,
       config: options.config,
       workDir: options.workDir,
+      publicDebugArtifactDirectory: options.publicDebugArtifactDirectory,
+      publicDebugArtifactProtectedRoot: options.publicDebugArtifactProtectedRoot,
       preflight,
       enclaveArtifacts,
       agentPolicies: options.agentPolicies,
@@ -265,6 +268,7 @@ function createWorkloadProfile(
   exportPlan: CloudHypervisorEnclaveExportPlan,
   artifacts: CloudHypervisorPreflightResult,
   agentPolicy: HostExecutorAgentPolicy | undefined,
+  publicFixtureDebug: boolean,
 ): CloudHypervisorWorkloadProfile {
   const resourceProfile = exportPlan.role === 'script'
     ? CLOUD_HYPERVISOR_ENCLAVE_RESOURCE_PROFILES.script
@@ -280,6 +284,7 @@ function createWorkloadProfile(
       invocationId: plan.invocationId,
       guest,
       exportPlan,
+      ...(publicFixtureDebug ? { publicFixtureDebug: true } : {}),
     });
   }
   if (!agentPolicy) throw new Error('Trusted agent policy is required for an agent enclave');
@@ -288,6 +293,7 @@ function createWorkloadProfile(
     invocationId: plan.invocationId,
     guest,
     exportPlan,
+    ...(publicFixtureDebug ? { publicFixtureDebug: true } : {}),
     apiProxy: {
       ip: ENCLAVE_AGENT_API_PROXY_IP,
       engine: 'copilot',
@@ -314,6 +320,8 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       readonly runState: HostExecutorRunState;
       readonly config: CloudHypervisorOptions;
       readonly workDir: string;
+      readonly publicDebugArtifactDirectory?: string;
+      readonly publicDebugArtifactProtectedRoot?: string;
       readonly preflight: CloudHypervisorPreflightResult;
       readonly enclaveArtifacts: VerifiedCloudHypervisorEnclaveArtifacts;
       readonly agentPolicies?: Readonly<Record<string, HostExecutorAgentPolicy>>;
@@ -330,6 +338,12 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       throw new Error('Host enclave execution requires the matching trusted Cloud Hypervisor release');
     }
     this.dependencies = { ...defaultDependencies, ...dependencies };
+    if (
+      Boolean(options.config.enclaveDebugPublic) !== Boolean(options.publicDebugArtifactDirectory)
+      || Boolean(options.publicDebugArtifactDirectory) !== Boolean(options.publicDebugArtifactProtectedRoot)
+    ) {
+      throw new Error('Public enclave debug requires host-verified public fixtures and a protected artifact directory');
+    }
   }
 
   close(): Promise<void> {
@@ -549,7 +563,9 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
           rootfs: verifiedRootfs.artifact.sha256,
         },
       };
-      const profile = await check('workload-profile', () => createWorkloadProfile(plan, exportPlan, artifacts, policy));
+      const profile = await check('workload-profile', () => createWorkloadProfile(
+        plan, exportPlan, artifacts, policy, Boolean(this.options.publicDebugArtifactDirectory),
+      ));
       await check('input-staging', () => raceInterruption(trackFilesystemWork(
         stageInvocationInputs(plan, role, policy, dependencies),
       )));
@@ -557,13 +573,21 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
         ...this.options.config,
         cloudHypervisorBinary: artifacts.cloudHypervisorBinary,
       };
+      const managerDependencies = invocationStorage?.managerDependencies ?? this.options.managerDependencies;
+      const debugDirectory = this.options.publicDebugArtifactDirectory;
       manager = await check('manager-create', () => dependencies.createManager(
         managerConfig,
         invocationStorage?.workDir ?? this.options.workDir,
         profile,
         runId,
         artifacts,
-        invocationStorage?.managerDependencies ?? this.options.managerDependencies,
+        debugDirectory
+          ? {
+              ...resolveCloudHypervisorManagerDependencies(managerDependencies),
+              enclaveDebugArtifactDirectory: path.join(debugDirectory, runId),
+              enclaveDebugArtifactProtectedRoot: this.options.publicDebugArtifactProtectedRoot,
+            }
+          : managerDependencies,
       ));
       if (filesystemState.aborted) throw new Error('Host executor invocation was cancelled');
       await check('manager-start', () => raceInterruption(trackFilesystemWork(manager!.start())));

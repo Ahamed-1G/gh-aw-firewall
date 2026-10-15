@@ -24,6 +24,12 @@ import {
 import { readHostExecutorInvocationDiagnostics } from './host-executor-journal';
 import { preserveHostExecutorInvocationEvidence } from '../cloud-hypervisor/diagnostics';
 import { resolveCloudHypervisorManagerDependencies } from '../cloud-hypervisor/manager';
+import {
+  verifyPublicEnclaveDebugRepositories,
+  ENCLAVE_DEBUG_ARTIFACT_PROTECTED_ROOT,
+  ENCLAVE_DEBUG_ARTIFACT_ROOT,
+} from './public-debug';
+import { logger } from '../logger';
 
 export const CLOUD_HYPERVISOR_ENCLAVE_STORAGE_REQUIRED =
   'Cloud Hypervisor enclaves require the trusted hard-bounded writable-storage provider (#9394); '
@@ -172,6 +178,12 @@ export async function startCloudHypervisorEnclaveLifecycle(
     config: config.cloudHypervisor,
     workDir: paths.workDir,
     agentPolicies: deriveAgentPolicies(config),
+    ...(config.cloudHypervisor.enclaveDebugPublic
+      ? {
+          publicDebugArtifactDirectory: ENCLAVE_DEBUG_ARTIFACT_ROOT,
+          publicDebugArtifactProtectedRoot: ENCLAVE_DEBUG_ARTIFACT_PROTECTED_ROOT,
+        }
+      : {}),
     environment,
     onPreflightStage: (stage) => updateEnclaveStartupProgress(config, { stage }),
     onHostPreflight: (hostPreflight) => updateEnclaveStartupProgress(config, { hostPreflight }),
@@ -181,6 +193,10 @@ export async function startCloudHypervisorEnclaveLifecycle(
   run.startPromise = (async () => {
     try {
       updateEnclaveStartupProgress(config, { stage: 'host-preflight' });
+      if (config.cloudHypervisor!.enclaveDebugPublic) {
+        await verifyPublicEnclaveDebugRepositories(config);
+        logger.warn(`Public enclave debug retains unredacted raw logs in ${ENCLAVE_DEBUG_ARTIFACT_ROOT}; do not publish these artifacts.`);
+      }
       await assertCloudHypervisorEnclavePrerequisites(config, storageProvider);
       updateEnclaveStartupProgress(config, { stage: 'storage-preflight' });
       run.storage = await storageProvider.prepareRun(options);
