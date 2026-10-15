@@ -12,12 +12,14 @@ function canonicalizeModel(model) {
 }
 
 function parseDollarsPerToken(value) {
+  if ((typeof value !== 'number' && typeof value !== 'string') ||
+      (typeof value === 'string' && value.trim() === '')) return null;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return parsed * DOLLARS_PER_TOKEN_TO_DOLLARS_PER_MILLION;
 }
 
-function normalizeCost(cost) {
+function normalizeCostRates(cost) {
   if (!cost || typeof cost !== 'object') return null;
   const input = parseDollarsPerToken(cost.input);
   const output = parseDollarsPerToken(cost.output);
@@ -43,6 +45,23 @@ function normalizeCost(cost) {
   };
 }
 
+function normalizeCost(cost) {
+  const defaultTier = normalizeCostRates(cost);
+  if (!defaultTier) return null;
+  if (!Object.hasOwn(cost, 'long_context')) return { default: defaultTier };
+
+  const rawLongContext = cost.long_context;
+  if (!rawLongContext || typeof rawLongContext !== 'object' || Array.isArray(rawLongContext) ||
+      ['input', 'cache_read', 'cache_write', 'output']
+        .some(field => !Object.hasOwn(rawLongContext, field))) {
+    return null;
+  }
+  const longContext = normalizeCostRates(rawLongContext);
+  const threshold = rawLongContext.max_prompt_tokens;
+  if (!longContext || !Number.isFinite(threshold) || threshold <= 0) return null;
+  return { default: defaultTier, longContext: { ...longContext, threshold } };
+}
+
 function getProviderAliases(provider) {
   if (provider === 'copilot') return ['copilot', 'github-copilot', 'github'];
   if (provider === 'gemini') return ['gemini', 'google'];
@@ -66,7 +85,7 @@ function getProviders() {
   return cachedProviders;
 }
 
-function resolveProviderPricingOverlay(provider, model) {
+function resolveProviderPricingOverlay(provider, model, inputTokens = 0) {
   const providers = getProviders();
   if (!providers || !provider || !model) return null;
   let models = null;
@@ -90,8 +109,16 @@ function resolveProviderPricingOverlay(provider, model) {
       if (configuredCanonical === canonical) break;
     }
   }
-  const pricing = normalizeCost(match?.entry?.cost);
-  return pricing ? { pricing, source: 'operator', tier: 'default' } : null;
+  const normalized = normalizeCost(match?.entry?.cost);
+  if (!normalized) return null;
+  const useLongContext = !!normalized.longContext &&
+    inputTokens > normalized.longContext.threshold;
+  const pricing = useLongContext ? normalized.longContext : normalized.default;
+  return {
+    pricing,
+    source: 'operator',
+    tier: useLongContext ? 'long_context' : 'default',
+  };
 }
 
 function resetProviderPricingOverlaysForTests() {

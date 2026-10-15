@@ -165,10 +165,14 @@ function canonicalizeModel(model) {
 
 function resolveModelPricing(model, state = aiCreditsState, provider = undefined, inputTokens = 0, options = {}) {
   const pricingModel = model.includes('?') ? model.slice(0, model.indexOf('?')) : model;
-  const operatorPricing = provider ? resolveProviderPricingOverlay(provider, pricingModel) : null;
+  const operatorPricing = provider
+    ? resolveProviderPricingOverlay(provider, pricingModel, inputTokens)
+    : null;
   if (operatorPricing) return operatorPricing;
 
-  const catalogPricing = provider ? resolveModelPricingCatalog(provider, pricingModel) : null;
+  const catalogPricing = provider
+    ? resolveModelPricingCatalog(provider, pricingModel, inputTokens)
+    : null;
   if (catalogPricing) return catalogPricing;
 
   const runtime = provider ? resolveRuntimePricing(provider, pricingModel, inputTokens) : null;
@@ -176,7 +180,13 @@ function resolveModelPricing(model, state = aiCreditsState, provider = undefined
     .every(field => Object.hasOwn(runtime.pricing, field))) {
     return runtime;
   }
-  const fallback = resolveLowerPriorityPricing(pricingModel, state, { ...options, provider, originalModel: model });
+  const fallback = resolveLowerPriorityPricing(pricingModel, state, {
+    ...options,
+    provider,
+    originalModel: model,
+    inputTokens: runtime ? 0 : inputTokens,
+    preferredTier: runtime?.tier,
+  });
   if (!runtime) return fallback;
   const mergedPricing = {};
   for (const field of ['input', 'cachedInput', 'cacheWrite', 'output']) {
@@ -191,9 +201,22 @@ function resolveModelPricing(model, state = aiCreditsState, provider = undefined
   return { ...runtime, pricing: mergedPricing };
 }
 
+function resolveCuratedPricing(pricing, inputTokens, preferredTier) {
+  const longContext = pricing.longContext;
+  const useLongContext = !!longContext && (preferredTier
+    ? preferredTier === 'long_context'
+    : inputTokens > longContext.threshold);
+  if (!useLongContext) {
+    const { longContext: _longContext, ...defaultPricing } = pricing;
+    return { pricing: defaultPricing, source: 'curated', tier: 'default' };
+  }
+  const { threshold: _threshold, ...selectedPricing } = longContext;
+  return { pricing: selectedPricing, source: 'curated', tier: 'long_context' };
+}
+
 function resolveLowerPriorityPricing(model, state, options = {}) {
   if (Object.hasOwn(pricingByModel, model)) {
-    return { pricing: pricingByModel[model], source: 'curated', tier: 'default' };
+    return resolveCuratedPricing(pricingByModel[model], options.inputTokens || 0, options.preferredTier);
   }
 
   const canonical = canonicalizeModel(model);
@@ -201,7 +224,9 @@ function resolveLowerPriorityPricing(model, state, options = {}) {
   // Try canonical form against canonicalized pricing keys
   for (const [configuredModel, pricing] of Object.entries(pricingByModel)) {
     const canonicalKey = canonicalizeModel(configuredModel);
-    if (canonical === canonicalKey) return { pricing, source: 'curated', tier: 'default' };
+    if (canonical === canonicalKey) {
+      return resolveCuratedPricing(pricing, options.inputTokens || 0, options.preferredTier);
+    }
   }
 
   const catalogModel = resolveCatalogModel(model);
