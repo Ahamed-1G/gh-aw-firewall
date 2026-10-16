@@ -9,6 +9,8 @@ ARG BASE_IMAGE=default-base
 
 FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS gh-build
 
+ENV GOTOOLCHAIN=go1.27.2
+
 ARG GH_VERSION=2.98.0
 ARG GH_SOURCE_SHA256=abada9e8b550547ac93f99250f3ad4d90ad623fa245cb54cb058f78030a6a5f6
 ARG GH_SOURCE_DATE_EPOCH=1787263311
@@ -30,7 +32,7 @@ RUN wget -q "https://github.com/cli/cli/archive/refs/tags/v${GH_VERSION}.tar.gz"
          '$1 == "dep" && $2 == "golang.org/x/net" && $3 == version { found=1 } END { exit !found }' \
     && /tmp/cli-${GH_VERSION}/bin/gh --version
 
-FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 AS default-base
+FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7 AS default-base
 
 FROM ${BASE_IMAGE} AS one-shot-token-build
 
@@ -187,6 +189,7 @@ RUN set -eux; \
       | sort -u > /usr/local/share/awf/browser-libs.manifest && \
     rm -f /tmp/pkgs-before-browser.txt /tmp/pkgs-after-browser.txt /tmp/browser-pkgs-installed.txt && \
     apt_upgrade_retry && \
+    rm -f /usr/bin/pebble && \
     # Raw sockets are unavailable to the agent; remove stale file capabilities
     # inherited from runner-like base images so they cannot be reactivated.
     for binary in /usr/bin/ping /usr/bin/mtr-packet; do \
