@@ -18,7 +18,6 @@ name: Smoke Cloud Hypervisor
 model: gpt-5.4-mini
 engine:
   id: copilot
-  version: 1.0.34
   args:
     - --allow-url=https://github.com
     - --allow-url=https://example.com
@@ -29,10 +28,7 @@ network:
 tools:
   github: false
   bash:
-    - curl
-    - printf
-    - cat
-    - jq
+    - "*"
 safe-outputs:
   threat-detection:
     enabled: false
@@ -51,6 +47,10 @@ sandbox:
     id: awf
     version: v0.28.31
     runtime: cloud-hypervisor
+    config:
+      filesystem:
+        allow-write:
+          - /tmp/gh-aw/aw_info.json
 strict: false
 steps:
   - name: Pre-compute merged PR check
