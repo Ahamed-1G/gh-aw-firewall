@@ -2,17 +2,17 @@
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Default: all PRs require review from maintainer
-* @Mossaka
+* @pelikhan @dsyme
 
 # Container definitions (security-sensitive)
-/containers/ @Mossaka
-/containers/router/ @Mossaka @lpcox @rabeckett @SivaKesava1
+/containers/ @pelikhan @dsyme
+/containers/router/ @pelikhan @dsyme @lpcox @rabeckett @SivaKesava1
 
 # CI/CD workflows
-/.github/workflows/ @Mossaka
+/.github/workflows/ @pelikhan @dsyme
 
 # Documentation site
-/docs-site/ @Mossaka
+/docs-site/ @pelikhan @dsyme
 
 # Core source code
-/src/ @Mossaka
+/src/ @pelikhan @dsyme
