@@ -1,4 +1,3 @@
-import { version as AWF_VERSION } from '../../package.json';
 import { CLOUD_HYPERVISOR_RELEASE_VERSION } from '../types/runtime-options';
 import {
   CLOUD_HYPERVISOR_ARTIFACT_REPOSITORY,
@@ -172,13 +171,6 @@ export function parseCloudHypervisorEnclaveArtifactManifest(
   contents: string,
   expectedReleaseTag: string,
 ): CloudHypervisorEnclaveArtifactManifest {
-  const runningReleaseTag = `v${AWF_VERSION}`;
-  if (expectedReleaseTag !== runningReleaseTag) {
-    throw new Error(
-      `Cloud Hypervisor enclave artifacts must match this AWF release: expected ${
-        runningReleaseTag}, got ${expectedReleaseTag}`,
-    );
-  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents);

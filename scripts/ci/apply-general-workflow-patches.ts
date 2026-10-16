@@ -725,6 +725,19 @@ export function applyGeneralWorkflowPatches(
   }
 
   if (workflowPath.endsWith('smoke-enclave-cloud-hypervisor.lock.yml')) {
+    const setupActionSha = '2687cab90c7b034aca6a2ad588928604025ad4b5';
+    content = content.replace(
+      /github\/gh-aw-actions\/setup@v0\.92\.1/g,
+      `github/gh-aw/actions/setup@${setupActionSha} # ${setupActionSha}`,
+    );
+    content = content.replace(
+      '"repo":"github/gh-aw-actions/setup","sha":"v0.92.1","version":"v0.92.1"',
+      `"repo":"github/gh-aw/actions/setup","sha":"${setupActionSha}","version":"${setupActionSha}"`,
+    );
+    content = content.replace(
+      /^ {6}- name: Checkout PR branch\n {8}id: checkout-pr\n {8}if: \|\n(?: {10}[^\n]*\n)+/m,
+      '      - name: Checkout PR branch\n        id: checkout-pr\n        if: false\n',
+    );
     if (!content.includes('exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" --build-local')) {
       installStepRegexGlobal.lastIndex = 0;
       if (!installStepRegexGlobal.test(content)) throw new Error('Missing released AWF install anchor for branch diagnostics');

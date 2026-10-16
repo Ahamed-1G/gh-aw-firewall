@@ -22,13 +22,18 @@ def main():
     def diagnostic(status, **fields):
         # stderr is discarded by default; public-fixture debug captures it
         # outside the guest. Never copy script, environment or exception text.
-        print(json.dumps({
-            "component": "enclave-script",
-            "phase": phase,
-            "status": status,
-            "elapsedMs": max(0, round((time.monotonic() - started) * 1000)),
-            **fields,
-        }, separators=(",", ":")), file=sys.stderr, flush=True)
+        try:
+            if sys.stderr is None:
+                return
+            print(json.dumps({
+                "component": "enclave-script",
+                "phase": phase,
+                "status": status,
+                "elapsedMs": max(0, round((time.monotonic() - started) * 1000)),
+                **fields,
+            }, separators=(",", ":")), file=sys.stderr, flush=True)
+        except BaseException:
+            pass
 
     try:
         diagnostic("started", uid=os.getuid(), gid=os.getgid())

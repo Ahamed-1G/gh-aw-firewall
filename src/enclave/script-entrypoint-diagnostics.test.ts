@@ -5,6 +5,7 @@ const entrypoint = path.resolve(__dirname, '../../containers/enclave/script-entr
 const harness = String.raw`
 import importlib.util
 import os
+import sys
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("script_entrypoint", os.environ["ENTRYPOINT"])
@@ -19,6 +20,13 @@ def operation(phase):
         if phase == "script-execute":
             if scenario == "exit-zero":
                 raise SystemExit(0)
+            if scenario == "close-stderr":
+                print("true")
+                sys.stderr.close()
+                return
+            if scenario == "close-stderr-failure":
+                sys.stderr.close()
+                raise PermissionError(13, "PRIVATE_SCRIPT PRIVATE_TOKEN /private/repository")
             print("true")
     return run
 
@@ -28,21 +36,30 @@ with patch.object(module.shutil, "copytree", operation("seed-copy")), \
      patch.object(module.runpy, "run_path", operation("script-execute")):
     try:
         module.main()
-    except OSError:
+    except OSError as error:
+        if scenario.startswith("close-stderr"):
+            print(type(error).__name__)
         raise SystemExit(1)
 `;
 
 describe('script enclave guest lifecycle diagnostics', () => {
-  it.each(['success', 'exit-zero', 'seed-copy', 'output-link', 'working-directory', 'script-execute'])(
+  it.each([
+    'success', 'exit-zero', 'close-stderr', 'close-stderr-failure',
+    'seed-copy', 'output-link', 'working-directory', 'script-execute',
+  ])(
     'records bounded stderr phases for %s without changing script stdout or exit status', scenario => {
       const result = spawnSync('python3', ['-c', harness], {
         encoding: 'utf8',
         env: { ...process.env, ENTRYPOINT: entrypoint, SCENARIO: scenario, PYTHONDONTWRITEBYTECODE: '1' },
       });
-      const success = scenario === 'success' || scenario === 'exit-zero';
+      const success = ['success', 'exit-zero', 'close-stderr'].includes(scenario);
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(success ? 0 : 1);
-      expect(result.stdout).toBe(scenario === 'success' ? 'true\n' : '');
+      expect(result.stdout).toBe(
+        scenario === 'success' || scenario === 'close-stderr' ? 'true\n'
+          : scenario === 'close-stderr-failure' ? 'PermissionError\n' : '',
+      );
+      if (scenario.startsWith('close-stderr')) return;
       const records = result.stderr.trim().split('\n').map(line => JSON.parse(line));
       expect(records[0]).toMatchObject({ component: 'enclave-script', phase: 'startup', status: 'started' });
       expect(records[records.length - 1]).toMatchObject({

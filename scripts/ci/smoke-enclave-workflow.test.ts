@@ -4,6 +4,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import * as yaml from 'js-yaml';
 import { applyGeneralWorkflowPatches } from './apply-general-workflow-patches';
+import { buildBranchEnclaveInstallSteps } from './workflow-step-builders';
 
 const workflowsDir = path.resolve(__dirname, '../../.github/workflows');
 const sourcePath = path.join(workflowsDir, 'smoke-enclave-build-test.md');
@@ -513,7 +514,8 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     for (const step of branchSteps) {
       expect(step.if).toBe("github.event_name == 'workflow_dispatch' && github.repository == 'github/gh-aw-firewall' && github.ref_type == 'branch' && github.ref != 'refs/heads/main'");
     }
-    expect(branchSteps[3].run).toContain('/dist/cli.js" --build-local "\\$@"');
+    expect(branchSteps[3].run).toContain('/dist/cli.js" --build-local "${AWF_ARGS[@]}"');
+    expect(branchSteps[3].run).toContain('elif [ "$ARG" = "--skip-pull" ]');
     expect(lock).toContain('exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" --build-local');
     expect(countOccurrences(lock, '--build-local')).toBe(1);
     expect(source).not.toContain('Do not dispatch this update yet');
@@ -528,6 +530,50 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(source).toContain('gh aw run smoke-enclave-cloud-hypervisor --ref main');
     expect(source).toContain('gh aw run smoke-enclave-cloud-hypervisor --ref your-pr-head-branch');
     expect(source).toContain('New script-entrypoint diagnostics require a subsequent release-attested rootfs');
+    expect(source).toContain('branch source must match `GITHUB_SHA`');
+    expect(source).toContain('source package version is independent');
+  });
+
+  it('disables PR-context checkout and verifies the branch source before npm install', () => {
+    const compiled = yaml.load(lock) as {
+      jobs: { agent: { steps: Array<{ name?: string; if?: string; run?: string }> } };
+    };
+    const steps = compiled.jobs.agent.steps;
+    const prCheckout = steps.find(step => step.name === 'Checkout PR branch');
+    const provenance = steps.find(step => step.name === 'Verify branch checkout provenance');
+    const install = steps.find(step => step.name === 'Install awf dependencies');
+
+    expect(prCheckout?.if).toBe(false);
+    expect(provenance?.run).toContain('git rev-parse HEAD');
+    expect(provenance?.run).toContain('"$GITHUB_SHA"');
+    expect(steps.indexOf(provenance!)).toBeLessThan(steps.indexOf(install!));
+  });
+
+  it('removes only pre-command --skip-pull from branch AWF arguments', () => {
+    const builtSteps = buildBranchEnclaveInstallSteps('      ');
+    const start = builtSteps.indexOf('          AWF_ARGS=()');
+    const end = builtSteps.indexOf('          exec ', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const argsFilter = builtSteps.slice(start, end);
+    const output = execFileSync('/bin/bash', [
+      '-c',
+      `${argsFilter}\nprintf '%s\\n' --build-local "\${AWF_ARGS[@]}"`,
+      'bash',
+      '--skip-pull',
+      '--cloud-hypervisor-preview',
+      '--',
+      'printf',
+      '--skip-pull',
+    ], { encoding: 'utf8' });
+
+    expect(output.trim().split('\n')).toEqual([
+      '--build-local',
+      '--cloud-hypervisor-preview',
+      '--',
+      'printf',
+      '--skip-pull',
+    ]);
   });
 
   it('uses one real gateway with late enclave discovery and host authentication', () => {

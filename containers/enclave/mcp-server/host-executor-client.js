@@ -255,12 +255,12 @@ function createHostExecutorClient(options) {
       ]);
       diagnose({ phase: 'exchange', status: 'failed',
         reason: reasons.get(error.message) || 'unknown',
-        elapsedMs: Math.max(0, Math.round(performance.now() - started)) });
+        exchangeElapsedMs: Math.max(0, Math.round(performance.now() - started)) });
       throw error;
     }
     const response = parseHostExecutorResponse(bytes, requestId);
     diagnose({ phase: 'response', status: response ? 'parsed' : 'failed',
-      elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+      exchangeElapsedMs: Math.max(0, Math.round(performance.now() - started)),
       ...(response ? response.ok
         ? { state: response.state, cancelGeneration: response.cancelGeneration,
             ...(response.outcome ? { outcome: response.outcome } : {}) }

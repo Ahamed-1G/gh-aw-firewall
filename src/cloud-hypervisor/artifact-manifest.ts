@@ -55,12 +55,6 @@ export function parseCloudHypervisorArtifactManifest(
   contents: string,
   expectedReleaseTag: string,
 ): CloudHypervisorArtifactManifest {
-  if (expectedReleaseTag !== CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG) {
-    throw new Error(
-      `Cloud Hypervisor artifacts must match this AWF release: expected ${
-        CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG}, got ${expectedReleaseTag}`,
-    );
-  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents);

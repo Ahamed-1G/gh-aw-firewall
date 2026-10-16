@@ -7,11 +7,11 @@ import {
 const digest = 'a'.repeat(64);
 const releaseTag = `v${AWF_VERSION}`;
 
-function role(role: 'script' | 'agent'): Record<string, unknown> {
+function role(role: 'script' | 'agent', tag = releaseTag): Record<string, unknown> {
   return {
     file: `enclave-${role}-rootfs.ext4`,
     role,
-    version: releaseTag,
+    version: tag,
     sha256: digest,
     sizeBytes: 4096,
     uid: 65534,
@@ -26,7 +26,7 @@ function role(role: 'script' | 'agent'): Record<string, unknown> {
   };
 }
 
-function manifest(overrides: Record<string, unknown> = {}): string {
+function manifest(overrides: Record<string, unknown> = {}, tag = releaseTag): string {
   return JSON.stringify({
     schemaVersion: 1,
     artifactType: 'awf-cloud-hypervisor-enclave-rootfs-set',
@@ -34,17 +34,17 @@ function manifest(overrides: Record<string, unknown> = {}): string {
     release: {
       repository: 'github/gh-aw-firewall',
       workflow: 'github/gh-aw-firewall/.github/workflows/release.yml',
-      tag: releaseTag,
+      tag,
       sourceCommit: 'b'.repeat(40),
     },
     compatibility: {
       cloudHypervisorVersion: '53.0',
       kernelVersion: '6.1.141',
-      supervisorVersion: releaseTag,
+      supervisorVersion: tag,
     },
     rootfs: {
-      script: role('script'),
-      agent: role('agent'),
+      script: role('script', tag),
+      agent: role('agent', tag),
     },
     ...overrides,
   });
@@ -72,6 +72,16 @@ describe('Cloud Hypervisor enclave artifact manifest', () => {
     );
   });
 
+  it('accepts an explicitly selected compatible artifact release independent of package version', () => {
+    const artifactTag = 'v0.28.59';
+    const parsed = parseCloudHypervisorEnclaveArtifactManifest(manifest({}, artifactTag), artifactTag);
+
+    expect(parsed.release.tag).toBe(artifactTag);
+    expect(parsed.compatibility.supervisorVersion).toBe(artifactTag);
+    expect(parsed.rootfs.script.version).toBe(artifactTag);
+    expect(parsed.rootfs.agent.version).toBe(artifactTag);
+  });
+
   it.each([
     ['wrong role', { ...role('script'), role: 'agent' }, /role must be script/],
     ['wrong file', { ...role('script'), file: 'rootfs.ext4' }, /file must be enclave-script/],
@@ -97,7 +107,7 @@ describe('Cloud Hypervisor enclave artifact manifest', () => {
 
   it('rejects stale releases, signer substitution, and unknown metadata', () => {
     expect(() => parseCloudHypervisorEnclaveArtifactManifest(manifest(), 'v0.0.0'))
-      .toThrow(/must match this AWF release/);
+      .toThrow(/manifest release mismatch/);
     expect(() => parseCloudHypervisorEnclaveArtifactManifest(manifest({
       release: {
         repository: 'attacker/repo',

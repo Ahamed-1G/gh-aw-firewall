@@ -1,4 +1,4 @@
-import { preserveIptablesAudit } from './artifact-preservation';
+import { preserveCleanupArtifacts, preserveIptablesAudit } from './artifact-preservation';
 import { collectDiagnosticLogs } from './diagnostic-collector';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -181,6 +181,15 @@ describe('docker-manager diagnostics', () => {
         'docker',
         [
           'cp',
+          'awf-enclave-mcp-server:/var/log/awf-enclave/enclave-host-executor.jsonl',
+          path.join(auditDir, 'enclave-host-executor.jsonl'),
+        ],
+        expect.objectContaining({ reject: false }),
+      );
+      expect(mockExecaSync).toHaveBeenCalledWith(
+        'docker',
+        [
+          'cp',
           'awf-enclave-mcp-server:/var/log/awf-enclave/runtime-telemetry.jsonl',
           path.join(auditDir, 'enclave-runtime.jsonl'),
         ],
@@ -198,11 +207,42 @@ describe('docker-manager diagnostics', () => {
       fs.rmSync(resolveEnclavePaths(getDir()).root, { recursive: true, force: true });
     });
 
+    it('preserves host executor audit evidence with owner-only permissions through cleanup', () => {
+      const workDir = getDir();
+      const enclaveRoot = resolveEnclavePaths(workDir).root;
+      const auditDir = `${workDir}-export`;
+      fs.mkdirSync(enclaveRoot, { recursive: true });
+      fs.mkdirSync(auditDir);
+      const hostAudit = path.join(auditDir, 'enclave-host-executor.jsonl');
+      mockExecaSync.mockImplementation((command: string, args: string[]) => {
+        if (command === 'docker' && args[0] === 'cp' && args[1].endsWith('enclave-host-executor.jsonl')) {
+          fs.writeFileSync(args[2], '{"component":"host-executor"}\n', { mode: 0o644 });
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (command === 'docker') return { exitCode: 1, stdout: '', stderr: '' };
+        if (command === 'chmod') return { exitCode: 0, stdout: '', stderr: '' };
+        throw new Error(`Unexpected command: ${command}`);
+      });
+
+      try {
+        preserveIptablesAudit(workDir, auditDir);
+        preserveCleanupArtifacts(workDir, { auditDir });
+        fs.rmSync(workDir, { recursive: true, force: true });
+
+        expect(fs.readFileSync(hostAudit, 'utf8')).toContain('host-executor');
+        expect(fs.statSync(hostAudit).mode & 0o777).toBe(0o600);
+      } finally {
+        mockExecaSync.mockReset();
+        fs.rmSync(auditDir, { recursive: true, force: true });
+      }
+    });
+
     it('does not mark audit incomplete when no agent session directory exists', () => {
       fs.mkdirSync(resolveEnclavePaths(getDir()).root, { recursive: true });
       const auditDir = path.join(getDir(), 'audit');
       fs.mkdirSync(auditDir);
       mockExecaSync
+        .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 1, stdout: '', stderr: 'sessions missing' });

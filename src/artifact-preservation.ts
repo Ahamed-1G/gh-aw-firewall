@@ -18,8 +18,10 @@ import { openArtifactDirectory } from './resolved-config-artifact';
 const ENCLAVE_SESSION_DIR = 'sessions';
 const ENCLAVE_AUDIT_FILES = [
   { source: 'enclave.jsonl', destination: 'enclave.jsonl' },
+  { source: 'enclave-host-executor.jsonl', destination: 'enclave-host-executor.jsonl' },
   { source: 'runtime-telemetry.jsonl', destination: 'enclave-runtime.jsonl' },
 ] as const;
+const PRIVATE_ENCLAVE_AUDIT_FILE = 'enclave-host-executor.jsonl';
 /**
  * Copies the iptables audit dump from the init-signal volume to the audit directory.
  * Must be called BEFORE stopContainers() because `docker compose down -v` destroys
@@ -137,6 +139,7 @@ function publicArtifactPaths(directory: string): string[] {
   return entries.flatMap((entry) => {
     const entryPath = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) return [];
+    if (entry.name === PRIVATE_ENCLAVE_AUDIT_FILE) return [];
     if (entry.isDirectory() && entry.name === 'cloud-hypervisor') return [];
     if (entry.isDirectory() && entry.name === 'diagnostics') {
       return publicArtifactPaths(entryPath);
@@ -154,10 +157,38 @@ function isRealDirectory(directory: string): boolean {
   }
 }
 
+function hasPrivateEnclaveAudit(directory: string): boolean {
+  try {
+    fs.lstatSync(path.join(directory, PRIVATE_ENCLAVE_AUDIT_FILE));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function hasPrivateDiagnostics(directory: string): boolean {
   return isRealDirectory(path.join(directory, 'cloud-hypervisor')) ||
     (isRealDirectory(path.join(directory, 'diagnostics')) &&
-      isRealDirectory(path.join(directory, 'diagnostics', 'cloud-hypervisor')));
+      isRealDirectory(path.join(directory, 'diagnostics', 'cloud-hypervisor'))) ||
+    hasPrivateEnclaveAudit(directory);
+}
+
+function protectPrivateEnclaveAudit(directory: string): void {
+  const filePath = path.join(directory, PRIVATE_ENCLAVE_AUDIT_FILE);
+  if (!hasPrivateEnclaveAudit(directory)) return;
+  const descriptor = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1) {
+      throw new Error('Refusing to change permissions for an unsafe enclave audit file');
+    }
+    fs.fchmodSync(descriptor, 0o600);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function chmodPublicArtifacts(directory: string): void {
@@ -167,6 +198,7 @@ function chmodPublicArtifacts(directory: string): void {
   // Cloud Hypervisor diagnostics are private, runner-owned artifacts.
   // Preserve their modes rather than applying the legacy public-log repair.
   if (hasPrivateDiagnostics(directory)) {
+    protectPrivateEnclaveAudit(directory);
     execa.sync('chmod', ['a+rX', directory]);
     const diagnosticsDirectory = path.join(directory, 'diagnostics');
     if (isRealDirectory(diagnosticsDirectory) &&

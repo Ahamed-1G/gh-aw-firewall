@@ -466,6 +466,21 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     })]));
   });
 
+  it('keeps exchange duration separate from runner-relative elapsed time', async () => {
+    const { handler } = makeHandler('script');
+    expect(await call(handler, args('script'))).toBe('{"status":"ok","result":true}');
+
+    const records = auditLifecycle.mock.calls
+      .filter(([category]) => category === 'host-executor')
+      .map(([, record]) => record as Record<string, unknown>);
+    const response = records.find(record => record.phase === 'response' && 'exchangeElapsedMs' in record);
+
+    expect(response).toBeDefined();
+    expect(response).toHaveProperty('elapsedMs');
+    expect(response).toHaveProperty('exchangeElapsedMs');
+    expect(response).not.toHaveProperty('payload');
+  });
+
   it.each(['script', 'agent'] as const)('does not disclose raw %s output or errors', async (role) => {
     const { handler } = makeHandler(role);
     output = '"PRIVATE_RAW_OUTPUT"';

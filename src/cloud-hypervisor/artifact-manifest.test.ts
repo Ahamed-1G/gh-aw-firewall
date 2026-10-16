@@ -9,22 +9,22 @@ const digest = 'a'.repeat(64);
 
 const releaseTag = CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG;
 
-function manifest(overrides: Record<string, unknown> = {}): string {
+function manifest(overrides: Record<string, unknown> = {}, tag = releaseTag): string {
   return JSON.stringify({
     schemaVersion: 1,
     architecture: 'x86_64',
     release: {
       repository: 'github/gh-aw-firewall',
       workflow: 'github/gh-aw-firewall/.github/workflows/release.yml',
-      tag: releaseTag,
+      tag,
       sourceCommit: 'b'.repeat(40),
     },
     artifacts: {
       cloudHypervisor: { file: 'cloud-hypervisor', version: '53.0', sha256: digest },
       virtiofsd: { file: 'virtiofsd', version: '1.13.3', sha256: digest },
       kernel: { file: 'vmlinux.bin', version: '6.1.141', sha256: digest },
-      rootfs: { file: 'rootfs.ext4', version: releaseTag, sha256: digest },
-      supervisor: { file: 'awf-supervisor', version: releaseTag, sha256: digest },
+      rootfs: { file: 'rootfs.ext4', version: tag, sha256: digest },
+      supervisor: { file: 'awf-supervisor', version: tag, sha256: digest },
     },
     ...overrides,
   });
@@ -49,9 +49,18 @@ describe('Cloud Hypervisor artifact manifest', () => {
     })).not.toThrow();
   });
 
+  it('accepts an explicitly selected compatible artifact release independent of package version', () => {
+    const artifactTag = 'v0.28.59';
+    const parsed = parseCloudHypervisorArtifactManifest(manifest({}, artifactTag), artifactTag);
+
+    expect(parsed.release.tag).toBe(artifactTag);
+    expect(parsed.artifacts.rootfs.version).toBe(artifactTag);
+    expect(parsed.artifacts.supervisor.version).toBe(artifactTag);
+  });
+
   it('rejects a different release, signer metadata, filename, or digest', () => {
     expect(() => parseCloudHypervisorArtifactManifest(manifest(), 'v1.2.4'))
-      .toThrow(/must match this AWF release/);
+      .toThrow(/manifest release mismatch/);
     expect(() => parseCloudHypervisorArtifactManifest(manifest({
       release: {
         repository: 'attacker/repo',

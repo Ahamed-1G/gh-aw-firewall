@@ -26,22 +26,22 @@ jest.mock('execa');
 const digest = 'a'.repeat(64);
 const mockedExeca = execa as jest.MockedFunction<typeof execa>;
 
-function manifest(): string {
+function manifest(tag = CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG): string {
   return JSON.stringify({
     schemaVersion: 1,
     architecture: 'x86_64',
     release: {
       repository: 'github/gh-aw-firewall',
       workflow: 'github/gh-aw-firewall/.github/workflows/release.yml',
-      tag: CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG,
+      tag,
       sourceCommit: 'b'.repeat(40),
     },
     artifacts: {
       cloudHypervisor: { file: 'cloud-hypervisor', version: '53.0', sha256: digest },
       virtiofsd: { file: 'virtiofsd', version: '1.13.3', sha256: digest },
       kernel: { file: 'vmlinux.bin', version: '6.1.141', sha256: digest },
-      rootfs: { file: 'rootfs.ext4', version: CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG, sha256: digest },
-      supervisor: { file: 'awf-supervisor', version: CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG, sha256: digest },
+      rootfs: { file: 'rootfs.ext4', version: tag, sha256: digest },
+      supervisor: { file: 'awf-supervisor', version: tag, sha256: digest },
     },
   });
 }
@@ -505,8 +505,10 @@ describe('Cloud Hypervisor preflight (foundation only)', () => {
   });
 
   it('verifies the attested manifest before its five artifact digests', async () => {
-    const deps = dependencies();
+    const artifactTag = 'v0.28.59';
+    const deps = dependencies({ readFile: jest.fn().mockResolvedValue(manifest(artifactTag)) });
     const result = await runCloudHypervisorPreflight(config({
+      artifactReleaseTag: artifactTag,
     }), deps);
 
     expect(result.version).toBe('53.0');

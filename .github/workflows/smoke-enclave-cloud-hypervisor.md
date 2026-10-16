@@ -164,8 +164,13 @@ because `sandbox.mcp.version` is an internal field; no validation bypass is used
 On main and release tags, AWF, Copilot, and primary/enclave artifact versions
 remain unchanged. Manual non-main branch runs instead build the checked-out
 host CLI and infrastructure containers, including the enclave MCP broker,
-using `--build-local`. They still use the verified v0.28.59 VM artifacts:
-no attestation, digest, or VM isolation checks are disabled.
+using `--build-local`. PR-context checkout is disabled for this workflow, and
+the branch source must match `GITHUB_SHA` before dependency installation or
+execution. The source package version is independent of the explicitly selected
+artifact release: signed manifests, release identity, compatibility fields,
+digests, and attestations must still agree on v0.28.59. Branch runs retain the
+verified v0.28.59 VM artifacts; no attestation, digest, or VM isolation checks
+are disabled.
 The branch runtime emits `enclave-host-executor.jsonl` in the protected audit,
 plus a durable `host-executor-control` snapshot covering pre-launch failures.
 New script-entrypoint diagnostics require a subsequent release-attested rootfs;
@@ -307,7 +312,10 @@ this pin update does not dispatch or authorize one.
 The acceptance policy authorizes two exact execution paths:
 1. **Manually selected branch in the official repository**: `main` tests the
    published release; other branches build the checked-out CLI and infrastructure
-   containers so a PR's head branch can be tested before merging. Requires:
+   containers so a PR's head branch can be tested before merging. The checkout
+   must match the dispatched `GITHUB_SHA` before branch source is installed or
+   run. The CLI package version need not equal the explicitly selected,
+   independently verified VM artifact release. Requires:
    - Official repository: `github/gh-aw-firewall`
    - Manual event: `workflow_dispatch`
    - Verified commit provenance: valid 40-character hex `GITHUB_SHA`, matching
@@ -323,7 +331,8 @@ The acceptance policy authorizes two exact execution paths:
 
 Both paths enforce strict fail-closed constraints:
 - Pull request events/merge refs (`refs/pull/*`), forks, and automated events are
-  rejected. Select the same-repository PR head branch in a manual dispatch instead.
+  rejected, and the generated PR-context checkout is disabled. Select the
+  same-repository PR head branch in a manual dispatch instead.
 - Exactly one public script enclave for `github/gh-aw-firewall` with Cloud Hypervisor runtime and a single invocation.
 - Agent enclaves, dynamic admission, custom script images, and private repository fixtures are rejected.
 - Release-attested artifacts with mutually matching release identities; unattested developer overrides are rejected.

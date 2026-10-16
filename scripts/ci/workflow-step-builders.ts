@@ -51,12 +51,41 @@ export function buildLocalInstallSteps(indent: string): string {
 
 export function buildBranchEnclaveInstallSteps(indent: string): string {
   const condition = "github.event_name == 'workflow_dispatch' && github.repository == 'github/gh-aw-firewall' && github.ref_type == 'branch' && github.ref != 'refs/heads/main'";
-  return buildLocalInstallSteps(indent)
+  const scriptIndent = `${indent}    `;
+  const provenanceStep = [
+    `${indent}- name: Verify branch checkout provenance`,
+    `${indent}  if: ${condition}`,
+    `${indent}  run: |`,
+    `${indent}    actual_sha="$(git rev-parse HEAD)"`,
+    `${indent}    if [ "$actual_sha" != "$GITHUB_SHA" ]; then`,
+    `${indent}      echo "Checked-out source does not match GITHUB_SHA" >&2`,
+    `${indent}      exit 1`,
+    `${indent}    fi`,
+  ].join('\n') + '\n';
+  const argumentFilter = [
+    `${scriptIndent}AWF_ARGS=()`,
+    `${scriptIndent}BEFORE_COMMAND=1`,
+    `${scriptIndent}for ARG in "$@"; do`,
+    `${scriptIndent}  if [ "$BEFORE_COMMAND" -eq 1 ]; then`,
+    `${scriptIndent}    if [ "$ARG" = "--" ]; then`,
+    `${scriptIndent}      BEFORE_COMMAND=0`,
+    `${scriptIndent}    elif [ "$ARG" = "--skip-pull" ]; then`,
+    `${scriptIndent}      continue`,
+    `${scriptIndent}    fi`,
+    `${scriptIndent}  fi`,
+    `${scriptIndent}  AWF_ARGS+=("$ARG")`,
+    `${scriptIndent}done`,
+    `${scriptIndent}exec "\${NODE_BIN}" "\${WORKSPACE_PATH}/dist/cli.js" --build-local "\${AWF_ARGS[@]}"`,
+  ].join('\n');
+  return provenanceStep + buildLocalInstallSteps(indent)
     .split('\n')
     .flatMap(line => line.startsWith(`${indent}- name:`)
       ? [line, `${indent}  if: ${condition}`] : [line])
     .join('\n')
-    .replace('/dist/cli.js" "\\$@"', '/dist/cli.js" --build-local "\\$@"');
+    .replace(
+      `${scriptIndent}exec "\${NODE_BIN}" "\${WORKSPACE_PATH}/dist/cli.js" "\\$@"`,
+      argumentFilter,
+    );
 }
 
 // Builds the replacement step that copies session state from the AWF-managed
