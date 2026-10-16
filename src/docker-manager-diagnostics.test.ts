@@ -191,6 +191,15 @@ describe('docker-manager diagnostics', () => {
         'docker',
         [
           'cp',
+          'awf-enclave-mcp-server:/var/log/awf-enclave/enclave-host-executor.jsonl',
+          path.join(auditDir, 'enclave-host-executor.jsonl'),
+        ],
+        expect.objectContaining({ reject: false }),
+      );
+      expect(mockExecaSync).toHaveBeenCalledWith(
+        'docker',
+        [
+          'cp',
           'awf-enclave-mcp-server:/var/log/awf-enclave/sessions',
           path.join(auditDir, 'enclave-agent-sessions'),
         ],
@@ -204,6 +213,7 @@ describe('docker-manager diagnostics', () => {
       const auditDir = path.join(getDir(), 'audit');
       fs.mkdirSync(auditDir);
       mockExecaSync
+        .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 0, stdout: '', stderr: '' })
         .mockReturnValueOnce({ exitCode: 1, stdout: '', stderr: 'sessions missing' });
