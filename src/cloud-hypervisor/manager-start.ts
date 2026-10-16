@@ -43,6 +43,7 @@ import {
   assertCloudHypervisorWorkloadLaunchable,
   type CloudHypervisorWorkloadProfile,
 } from './workload-profile';
+import type { HostPreflightCheck, HostPreflightReporter } from './host-preflight-progress';
 
 export interface CloudHypervisorStartContext {
   config: CloudHypervisorOptions;
@@ -53,6 +54,8 @@ export interface CloudHypervisorStartContext {
   /** True only for the internal host-executor backend; user runtime selection never sets this. */
   allowTrustedEnclaveExecution?: boolean;
   verifiedArtifacts?: CloudHypervisorPreflightResult;
+  launchReport?: HostPreflightReporter;
+  managerStartReport?: HostPreflightReporter;
   stdoutCapture: BoundedOutputCapture;
   stderrCapture: BoundedOutputCapture;
   setNetworkPlan(plan: MicrovmNetworkPlan | undefined): void;
@@ -75,14 +78,18 @@ export async function startCloudHypervisor(
 ): Promise<CloudHypervisorApiClient> {
   const {
     config, workDir, dependencies, paths, workloadProfile, verifiedArtifacts,
+    managerStartReport,
     allowTrustedEnclaveExecution,
   } = context;
   assertCloudHypervisorWorkloadLaunchable(workloadProfile, allowTrustedEnclaveExecution);
   const guestConfig = workloadProfile.guest;
+  const check = <T>(id: HostPreflightCheck, operation: () => Promise<T> | T): Promise<T> | T =>
+    context.launchReport ? context.launchReport.check(id, operation) : operation();
 
   let startupError: unknown;
   try {
-    const artifacts = verifiedArtifacts ?? await dependencies.preflight(config);
+    const artifacts = verifiedArtifacts
+      ?? await check('artifact-preflight', () => dependencies.preflight(config));
     const networkConfig: (CloudHypervisorManagerNetworkConfig & Pick<
       MicrovmNetworkPlanOptions, 'enclaveAgent'
     >) | undefined =
@@ -119,11 +126,11 @@ export async function startCloudHypervisor(
       useradd: artifacts.tools.useradd,
       userdel: artifacts.tools.userdel,
     };
-    await dependencies.cleanupRegistry.reapPending(
+    await check('recovery', () => dependencies.cleanupRegistry.reapPending(
       artifacts.tools.ip,
       artifacts.tools.umount,
       vmmTools,
-    );
+    ));
     const guestIdentity = guestConfig?.identity ?? dependencies.resolveIdentity();
     const cleanupRecord = await dependencies.cleanupRegistry.createPending(
       paths,
@@ -140,7 +147,7 @@ export async function startCloudHypervisor(
       releaseAcl: (aclPath) => cleanupRecord.releaseVmmAcl(aclPath),
     });
     context.setVmmIdentity(vmmIdentityManager);
-    const identity = await vmmIdentityManager.allocate();
+    const identity = await check('identity', () => vmmIdentityManager.allocate());
     let networkPlan: MicrovmNetworkPlan | undefined;
     let networkNamespace: string;
     if (networkConfig) {
@@ -178,7 +185,7 @@ export async function startCloudHypervisor(
         resourceCreated: (resource) => cleanupRecord.captureNetworkResource(resource),
       });
       context.setNetwork(network);
-      await network.setup();
+      await check('network', () => network.setup());
       networkNamespace = networkPlan.namespaceName;
     } else {
       const namespacePlan = createCloudHypervisorEmptyNetworkNamespacePlan(paths.runId);
@@ -189,7 +196,7 @@ export async function startCloudHypervisor(
         { resourceCreated: (resource) => cleanupRecord.captureNetworkResource(resource) },
       );
       context.setNetwork(network);
-      await network.setup();
+      await check('network', () => network.setup());
       networkNamespace = namespacePlan.namespaceName;
     }
     let rootfsSource = artifacts.rootfsPath;
@@ -218,10 +225,10 @@ export async function startCloudHypervisor(
       }, artifacts.tools, (source, destination) =>
         dependencies.copySparseFile(artifacts.tools.rsync, source, destination));
       context.setRootfsPreparer(rootfsPreparer);
-      rootfsSource = await rootfsPreparer.prepare();
+      rootfsSource = await check('rootfs', () => rootfsPreparer.prepare());
     }
 
-    await prepareRunDirectory(dependencies, paths, identity);
+    await check('run-directory', () => prepareRunDirectory(dependencies, paths, identity));
     await cleanupRecord.captureRunDirectory();
     const cgroup = dependencies.createCgroup(
       paths.cgroupPath,
@@ -235,10 +242,10 @@ export async function startCloudHypervisor(
         : { memoryMib: config.memoryMib, vcpuCount: config.vcpuCount },
     );
     context.setCgroup(cgroup);
-    await cgroup.setup();
+    await check('cgroup', () => cgroup.setup());
     await cleanupRecord.captureCgroup();
-    await stageArtifact(dependencies, artifacts.kernelPath, paths.kernelPath, 0o400, identity);
-    await stageArtifact(
+    await check('kernel-stage', () => stageArtifact(dependencies, artifacts.kernelPath, paths.kernelPath, 0o400, identity));
+    await check('rootfs-stage', () => stageArtifact(
       dependencies,
       rootfsSource,
       paths.rootfsPath,
@@ -249,7 +256,7 @@ export async function startCloudHypervisor(
         rootfsSource,
         paths.rootfsPath,
       ),
-    );
+    ));
     await stageDiagnosticFile(dependencies, paths.logPath, identity);
     await stageDiagnosticFile(dependencies, paths.serialLogPath, identity);
     await vmmIdentityManager.validateOwnedPaths([
@@ -278,7 +285,7 @@ export async function startCloudHypervisor(
       await cleanupRecord.prepareProcess(
         'vmm', artifacts.cloudHypervisorBinary, paths.apiSocketPath,
       );
-      const child = dependencies.launch(launchCommand.command, [...launchCommand.args], {
+      const launch = () => dependencies.launch(launchCommand.command, [...launchCommand.args], {
         reject: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         // Cloud Hypervisor directly processes untrusted guest/device input, so
@@ -286,30 +293,41 @@ export async function startCloudHypervisor(
         extendEnv: false,
         env: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' },
       });
-      context.setProcess(child);
+      const registerLaunchedProcess = (): { child: ExecaChildProcess<string>; pid: number } => {
+        const launched = launch();
+        context.setProcess(launched);
+        if (launched.pid === undefined) {
+          throw new Error('Cloud Hypervisor process did not expose a PID');
+        }
+        return { child: launched, pid: launched.pid };
+      };
+      const launchedProcess = context.launchReport
+        ? context.launchReport.checkSync('vmm-launch', registerLaunchedProcess)
+        : registerLaunchedProcess();
+      const { child, pid: processId } = launchedProcess;
       child.stdout?.on('data', (chunk: Buffer | string) => context.stdoutCapture.append(chunk));
       child.stderr?.on('data', (chunk: Buffer | string) => context.stderrCapture.append(chunk));
-      if (child.pid === undefined) throw new Error('Cloud Hypervisor process did not expose a PID');
-      await cgroup.assign(child.pid);
-      await cleanupRecord.captureProcess('vmm', child.pid);
+      await cgroup.assign(processId);
+      await cleanupRecord.captureProcess('vmm', processId);
 
-      await waitForApiSocket(dependencies, paths, config.apiTimeoutMs, child);
+      await check('api-socket', () => waitForApiSocket(dependencies, paths, config.apiTimeoutMs, child));
       await vmmIdentityManager.validateOwnedPaths([paths.apiSocketPath]);
       const client = dependencies.createClient(paths.apiSocketPath, config.apiTimeoutMs);
       context.setClient(client);
-      await client.ping();
+      await check('api-ping', () => client.ping());
       if (child.pid === undefined) {
         throw new Error('Cloud Hypervisor launcher did not report a PID for confinement verification');
       }
-      context.setConfinementEvidence(await dependencies.verifyConfinement({
-        pid: child.pid,
+      const pid = child.pid;
+      context.setConfinementEvidence(await check('confinement', () => dependencies.verifyConfinement({
+        pid,
         expectedExecutable: config.cloudHypervisorBinary,
         identity,
         launchPolicy: launchCommand.confinementPolicy,
         networkNamespace,
         cgroupPath: paths.cgroupPath,
         cgroupLimits: cgroup.expectedLimits(),
-      }));
+      })));
       if (guestConfig) {
         const virtiofsd = dependencies.createVirtiofsdManager(
           artifacts.virtiofsdBinary, paths.runDirectory, paths.virtiofsdShareDirectory,
@@ -320,11 +338,11 @@ export async function startCloudHypervisor(
         context.setVirtiofsd(virtiofsd);
         try {
           context.setFsDevices(
-            await virtiofsd.start(
+            await check('virtiofsd', () => virtiofsd.start(
               guestConfig.exports,
               guestConfig.mountEnforcement,
               guestConfig.enclaveResources?.writableStorageBytes,
-            ),
+            )),
           );
           await cleanupRecord.captureVirtiofsdResources();
         } catch (error) {
@@ -335,7 +353,7 @@ export async function startCloudHypervisor(
           context.getFsDevices().map((device) => device.socketPath),
         );
       }
-      await client.vmCreate(buildCloudHypervisorVmConfig({
+      await check('vm-create', () => client.vmCreate(buildCloudHypervisorVmConfig({
         config,
         paths,
         networkPlan,
@@ -344,12 +362,14 @@ export async function startCloudHypervisor(
           ? { enclaveResources: guestConfig.enclaveResources }
           : {}),
         fsDevices: context.getFsDevices(),
-      }));
+      })));
       return client;
     }, networkPlan !== undefined);
   } catch (error) {
     startupError = error;
   }
+
+  managerStartReport?.fail('manager-start', startupError);
 
   const startupEvidenceDirectory = path.join(
     workDir,
@@ -370,7 +390,11 @@ export async function startCloudHypervisor(
     );
   }
   try {
-    await context.stop();
+    if (context.launchReport) {
+      await context.launchReport.fork('host-invocation-cleanup').check('manager-stop', () => context.stop());
+    } else {
+      await context.stop();
+    }
   } catch (cleanupError) {
     throw new Error(
       `Cloud Hypervisor startup failed: ${formatError(startupError)}; ` +

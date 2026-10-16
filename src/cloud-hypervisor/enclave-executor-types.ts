@@ -102,6 +102,8 @@ export interface HostEnclaveExecutorDependencies {
     runId: string,
     artifacts: CloudHypervisorPreflightResult,
     managerDependencies?: CloudHypervisorManagerDependencies,
+    launchReport?: import('./host-preflight-progress').HostPreflightReporter,
+    managerStartReport?: import('./host-preflight-progress').HostPreflightReporter,
   ) => HostEnclaveExecutorManager;
   readonly mountTmpfs: (
     directory: string,
