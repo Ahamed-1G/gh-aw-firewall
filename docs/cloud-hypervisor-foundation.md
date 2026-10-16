@@ -1430,6 +1430,34 @@ an unresolved launch failure. Generic broker `launch-failed` or lifecycle
 errors and earlier transient gateway DNS/refusal logs do not identify the
 failed host operation.
 
+The protected broker audit also includes `enclave-host-executor.jsonl`.
+It records availability, socket connection, invoke/status/cancel/settle
+exchanges, parsed lifecycle state, terminal digest/schema validation, and
+the precise phase that failed. Error reasons and socket errno values are
+allowlisted; request bodies, capabilities, results, paths, raw exceptions,
+and stacks are never copied. Each runner emits at most 4,096 records plus a
+limit marker. This audit stays outside the primary guest and is preserved
+with the existing enclave audit directory, including on invocation failure.
+The caller still receives only the canonical finite result or error.
+
+A separate `component: "host-executor-control"` snapshot in the same protected
+host-executor evidence directory covers request rejection, plan derivation,
+durable registration, backend entry/completion/failure, settlement, and shutdown.
+It is created when the host listener starts, so failures before VM manager
+creation or invocation snapshot construction still leave evidence.
+It retains 128 events and the first failure independently, using only finite
+reason/error categories. Later persistence failures report a fixed error
+without preventing resource cleanup.
+
+For script guests, the entrypoint emits bounded JSON lifecycle records on stderr:
+startup identity, seed copy, output link, working-directory setup, and script
+execution, with elapsed time and native error category/errno on failure.
+These do not enter script stdout or the bounded result. Guest streams remain
+discarded by default; the existing public-fixture debug opt-in captures them
+in `guest-stderr.raw.log`. They require a rebuilt, release-attested script rootfs.
+Broker and host diagnostics do not require a new guest rootfs and can explain
+failures that occur before the guest starts.
+
 `bounded-runtime/artifact-snapshot` remains the enclosing gate.
 `bounded-runtime/snapshot-journal` identifies preparation of the recovery
 journal before any snapshot directory is created. Within `artifact-snapshot`,

@@ -85,6 +85,24 @@ describe('isCloudHypervisorScriptAcceptanceWorkflow', () => {
     }))).toBe(true);
   });
 
+  it.each(['feature/enclave-diagnostics', 'lpcox-enclave-smoke-v0921'])(
+    'allows manual same-repository branch iteration on %s', (branch) => {
+      process.env.GITHUB_REF = `refs/heads/${branch}`;
+      process.env.GITHUB_REF_TYPE = 'branch';
+      process.env.GITHUB_REF_NAME = branch;
+      process.env.GITHUB_SHA = VALID_SHA;
+      process.env.GITHUB_WORKFLOW_SHA = VALID_SHA;
+      process.env.GITHUB_WORKFLOW_REF = `${ACCEPTANCE_WORKFLOW_PATH}@${process.env.GITHUB_REF}`;
+      expect(isCloudHypervisorScriptAcceptanceWorkflow(config())).toBe(true);
+      process.env.GITHUB_WORKFLOW_REF = `${ACCEPTANCE_WORKFLOW_PATH}@${VALID_SHA}`;
+      expect(isCloudHypervisorScriptAcceptanceWorkflow(config())).toBe(true);
+      for (const event of ['pull_request', 'pull_request_target', 'push']) {
+        process.env.GITHUB_EVENT_NAME = event;
+        expect(isCloudHypervisorScriptAcceptanceWorkflow(config())).toBe(false);
+      }
+    },
+  );
+
   it('allows the main workflow when GITHUB_WORKFLOW_SHA is omitted', () => {
     process.env.GITHUB_WORKFLOW_REF = ACCEPTANCE_MAIN_REF;
     process.env.GITHUB_REF = 'refs/heads/main';

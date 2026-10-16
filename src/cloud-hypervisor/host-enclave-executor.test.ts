@@ -853,7 +853,8 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
               return {
                 ...failingManager,
                 stop: async () => {
-                  const [persisted] = hostExecutorJournal.readHostExecutorInvocationDiagnostics(runState);
+                  const persisted = hostExecutorJournal.readHostExecutorInvocationDiagnostics(runState)
+                    .find(file => JSON.parse(file.contents).invocationId === plan.invocationId)!;
                   expect(JSON.parse(persisted.contents)).toMatchObject({
                     failure: { stage: 'host-invocation/manager-start', code: 'EPERM' },
                     checks: { 'host-invocation/instance-start': ['not-attempted', 'none'] },
@@ -865,7 +866,8 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           });
           await expect(combinedFailureBackend.execute(plan, new AbortController().signal))
             .resolves.toEqual({ outcome: 'executor-failure', cleanupComplete: false });
-          const [persisted] = hostExecutorJournal.readHostExecutorInvocationDiagnostics(runState);
+          const persisted = hostExecutorJournal.readHostExecutorInvocationDiagnostics(runState)
+            .find(file => JSON.parse(file.contents).invocationId === plan.invocationId)!;
           const diagnostic = JSON.parse(persisted.contents);
           expect(diagnostic).toMatchObject({
             schemaVersion: 1,

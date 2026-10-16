@@ -163,6 +163,15 @@ The updated acceptance policy authorizes the reviewed official workflow on
 `main` (`refs/heads/main`) to test an independently pinned published release,
 while preserving the approved tagged path.
 
+The current source additionally permits manually selected same-repository
+branches with exact workflow/ref/SHA identity. The smoke installs the
+branch-built CLI and infrastructure containers only on non-main branch
+dispatches; main/tag runs keep the published release path. PR events,
+`refs/pull/*`, forks and automated triggers remain rejected. This branch
+iteration mode retains release-attested VM artifacts, the single public
+script invocation, and all authentication/isolation checks; it does not
+enable unattested guest rootfs changes.
+
 However, existing published AWF host binaries (including v0.28.52 and v0.28.53)
 only contain the older tag-only guard. Because the acceptance workflow executes
 the installed released binary rather than local unverified source, dispatching

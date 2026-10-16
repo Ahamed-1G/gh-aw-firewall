@@ -258,6 +258,7 @@ async function main() {
     }),
   );
   const handlers = {};
+  const hostExecutorAudit = createProtectedAuditLog(serverConfig.auditDir, 'enclave-host-executor.jsonl');
   const runners = [];
   const executors = [];
   let maxScriptBytes;
@@ -271,7 +272,7 @@ async function main() {
     const runner = await runStartupStage(
       startupReporter, 'script-selection', 'script-runner-initialization-failed', () =>
         config.executorBackend === 'cloud-hypervisor'
-          ? createHostExecutorRunner(config, { nowMs: clock.nowMs })
+          ? createHostExecutorRunner(config, { nowMs: clock.nowMs, audit: hostExecutorAudit })
           : createScriptRunner(config, { nowMs: clock.nowMs }),
       { executorKind: 'script' },
     );
@@ -316,7 +317,7 @@ async function main() {
     const runner = await runStartupStage(
       startupReporter, 'agent-selection', 'agent-runner-initialization-failed', () =>
         config.executorBackend === 'cloud-hypervisor'
-          ? createHostExecutorRunner(config, { nowMs: clock.nowMs })
+          ? createHostExecutorRunner(config, { nowMs: clock.nowMs, audit: hostExecutorAudit })
           : createAgentRunner(config, { nowMs: clock.nowMs }),
       { executorKind: 'agent' },
     );

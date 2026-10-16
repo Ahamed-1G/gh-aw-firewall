@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  HostExecutorInvocationDiagnostics, readHostExecutorInvocationDiagnostics,
+  HostExecutorInvocationDiagnostics, HostExecutorControlDiagnostics, readHostExecutorInvocationDiagnostics,
 } from './host-executor-journal';
 import type { HostExecutorInvocationPlan, HostExecutorRunState } from './host-executor-server';
 import { HostPreflightReporter } from '../cloud-hypervisor/host-preflight-progress';
@@ -82,5 +82,24 @@ describe('protected host invocation evidence', () => {
     fs.mkdirSync(run.journalDir!, { mode: 0o700 });
     fs.symlinkSync(root, path.join(run.journalDir!, 'diagnostics'));
     expect(() => new HostExecutorInvocationDiagnostics(run, plan)).toThrow('Unsafe journal ancestor');
+  });
+
+  it('bounds pre-launch control evidence, retains the first failure and excludes raw errors', () => {
+    const diagnostic = new HostExecutorControlDiagnostics(run);
+    for (let i = 0; i < 140; i++) diagnostic.record('invoke-plan');
+    diagnostic.record('backend-failed', Object.assign(new TypeError('PRIVATE_TOKEN PRIVATE_PAYLOAD'), {
+      code: 'EACCES', stderr: 'PRIVATE_STDERR',
+    }));
+    diagnostic.record('shutdown');
+    const [file] = readHostExecutorInvocationDiagnostics(run);
+    const snapshot = JSON.parse(file.contents);
+    expect(snapshot).toMatchObject({
+      component: 'host-executor-control', sequence: 142, dropped: 14,
+      failure: { phase: 'backend-failed', reason: 'EACCES', errorType: 'TypeError' },
+    });
+    expect(snapshot.events).toHaveLength(128);
+    expect(file.contents).not.toMatch(/PRIVATE_|TOKEN|payload|stderr/);
+    expect(Buffer.byteLength(file.contents)).toBeLessThan(64 * 1024);
+    expect(fs.statSync(path.join(run.journalDir!, 'diagnostics', file.name)).mode & 0o777).toBe(0o600);
   });
 });

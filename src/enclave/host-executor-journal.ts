@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import type { HostExecutorInvocationPlan, HostExecutorRunState } from './host-executor-server';
-import { HOST_EXECUTOR_ID_PATTERN, HOST_EXECUTOR_ENTRY_ID_PATTERN } from './host-executor-protocol';
+import { HOST_EXECUTOR_ID_PATTERN, HOST_EXECUTOR_ENTRY_ID_PATTERN, type HostExecutorError } from './host-executor-protocol';
 import {
   resolveCleanupDependencies,
   type CleanupRegistryDependencies,
@@ -142,6 +142,69 @@ export class HostExecutorJournal {
       fs.writeFileSync(fd, `${JSON.stringify(value)}\n`);
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
+  }
+}
+
+/** Run-level evidence also covers failures before an invocation plan exists. */
+export type HostExecutorControlPhase =
+  | 'request-rejected' | 'invoke-plan' | 'invocation-register' | 'backend-start'
+  | 'backend-complete' | 'backend-failed' | 'cleanup-pending' | 'settled' | 'shutdown'
+  | 'plan-run-identity' | 'plan-entry-policy' | 'plan-static-seed' | 'plan-selector-policy' | 'plan-path';
+
+export class HostExecutorControlDiagnostics {
+  private readonly file: string;
+  private readonly started = Date.now();
+  private persistenceFailed = false;
+  private readonly snapshot: {
+    schemaVersion: 1;
+    component: 'host-executor-control';
+    runId: string;
+    sequence: number;
+    dropped: number;
+    events: Array<{
+      phase: string; elapsedMs: number; reason: string; errorType: string;
+    }>;
+    failure?: { phase: string; elapsedMs: number; reason: string; errorType: string };
+  };
+
+  constructor(run: HostExecutorRunState) {
+    if (!HOST_EXECUTOR_ID_PATTERN.test(run.runId)) throw new Error('Invalid host executor run identity');
+    const directory = path.join(hostExecutorJournalDirectory(run), 'diagnostics');
+    prepareDirectory(directory);
+    const id = createHash('sha256').update(`awf-host-control-v1:${run.runId}`).digest('hex').slice(0, 32);
+    this.file = path.join(directory, `${run.runId}-${id}.json`);
+    this.snapshot = {
+      schemaVersion: 1, component: 'host-executor-control', runId: run.runId,
+      sequence: 0, dropped: 0, events: [],
+    };
+    persist(this.file, this.snapshot, true);
+  }
+
+  record(
+    phase: HostExecutorControlPhase,
+    error?: unknown,
+    rejection?: HostExecutorError,
+  ): void {
+    const event = {
+      phase, elapsedMs: Math.max(0, Date.now() - this.started),
+      reason: rejection ?? (error === undefined ? 'none' : hostPreflightReason(error)),
+      errorType: error instanceof TypeError ? 'TypeError'
+        : error instanceof RangeError ? 'RangeError'
+        : error instanceof SyntaxError ? 'SyntaxError'
+        : error instanceof Error ? 'Error' : 'unknown',
+    };
+    this.snapshot.sequence += 1;
+    const firstFailure = !this.snapshot.failure && (error !== undefined || phase === 'cleanup-pending');
+    if (firstFailure) this.snapshot.failure = event;
+    if (this.snapshot.events.length < 128) this.snapshot.events.push(event);
+    else this.snapshot.dropped += 1;
+    if (this.snapshot.dropped > 0 && !firstFailure && phase !== 'shutdown') return;
+    try {
+      persist(this.file, this.snapshot);
+    } catch {
+      if (!this.persistenceFailed) logger.error('Host executor control diagnostic persistence failed; earlier evidence is retained.');
+      this.persistenceFailed = true;
+    }
   }
 }
 

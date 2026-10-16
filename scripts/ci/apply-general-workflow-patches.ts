@@ -38,6 +38,7 @@ import {
 } from './workflow-patch-patterns';
 import {
   buildLocalInstallSteps,
+  buildBranchEnclaveInstallSteps,
   buildCopySessionStateStep,
   buildCopilotCliDaemonCopyStep,
   buildStripExecBitsStep,
@@ -724,6 +725,14 @@ export function applyGeneralWorkflowPatches(
   }
 
   if (workflowPath.endsWith('smoke-enclave-cloud-hypervisor.lock.yml')) {
+    if (!content.includes('exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" --build-local')) {
+      installStepRegexGlobal.lastIndex = 0;
+      if (!installStepRegexGlobal.test(content)) throw new Error('Missing released AWF install anchor for branch diagnostics');
+      installStepRegexGlobal.lastIndex = 0;
+      content = content.replace(installStepRegexGlobal, (match, indent: string) =>
+        match + buildBranchEnclaveInstallSteps(indent));
+      log.push('  Added branch-only source runtime build for enclave diagnostics');
+    }
     // gh-aw v0.92.1 gates uploads on this ID but omits it from the redaction step.
     content = content.replace(
       /^( {6}- name: Redact secrets in logs\n)( {8}if: always\(\)\n)/gm,

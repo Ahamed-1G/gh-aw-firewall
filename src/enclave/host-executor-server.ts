@@ -17,7 +17,10 @@
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
-import { HostExecutorJournal, hostExecutorJournalDirectory } from './host-executor-journal';
+import {
+  HostExecutorJournal, HostExecutorControlDiagnostics, hostExecutorJournalDirectory,
+  type HostExecutorControlPhase,
+} from './host-executor-journal';
 import {
   HOST_EXECUTOR_FRAME_HEADER_BYTES,
   HOST_EXECUTOR_ENTRY_ID_PATTERN,
@@ -160,7 +163,7 @@ interface InvocationRecord {
 }
 
 class RequestRejection extends Error {
-  constructor(readonly code: HostExecutorError) {
+  constructor(readonly code: HostExecutorError, readonly diagnosticPhase?: HostExecutorControlPhase) {
     super(code);
   }
 }
@@ -218,7 +221,7 @@ function validateRunState(runState: HostExecutorRunState): HostExecutorRunState 
 function childPath(parent: string, name: string): string {
   const joined = path.join(parent, name);
   if (path.dirname(joined) !== parent || path.basename(joined) !== name) {
-    throw new RequestRejection('denied');
+    throw new RequestRejection('denied', 'plan-path');
   }
   return joined;
 }
@@ -231,9 +234,9 @@ export function deriveHostExecutorInvocationPlan(
   runState: HostExecutorRunState,
   request: HostExecutorInvokeRequest,
 ): HostExecutorInvocationPlan {
-  if (request.runId !== runState.runId) throw new RequestRejection('denied');
+  if (request.runId !== runState.runId) throw new RequestRejection('denied', 'plan-run-identity');
   const entry = runState.entries.find(({ entryId }) => entryId === request.entryId);
-  if (!entry || entry.executorKind !== request.executorKind) throw new RequestRejection('denied');
+  if (!entry || entry.executorKind !== request.executorKind) throw new RequestRejection('denied', 'plan-entry-policy');
 
   const plan: {
     -readonly [K in keyof HostExecutorInvocationPlan]: HostExecutorInvocationPlan[K];
@@ -254,12 +257,12 @@ export function deriveHostExecutorInvocationPlan(
     ),
   };
   if (request.seedId !== undefined) {
-    if (!entry.staticSeedIds.includes(request.seedId)) throw new RequestRejection('denied');
+    if (!entry.staticSeedIds.includes(request.seedId)) throw new RequestRejection('denied', 'plan-static-seed');
     plan.seedId = request.seedId;
     plan.seedHostPath = childPath(runState.seedsDir, request.seedId);
   } else {
     if (request.executorKind !== 'agent' || !entry.dynamicAgents || request.selector === undefined) {
-      throw new RequestRejection('denied');
+      throw new RequestRejection('denied', 'plan-selector-policy');
     }
     plan.selector = request.selector;
   }
@@ -316,6 +319,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
     throw new Error('Host executor journal must be separate from the broker runtime directory');
   }
   const journal = new HostExecutorJournal(runState);
+  const diagnostics = new HostExecutorControlDiagnostics(runState);
 
   const capability = generateHostExecutorCapability();
   writeCapabilityFile(capabilityPath, capability);
@@ -389,6 +393,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
   };
 
   const launch = (plan: HostExecutorInvocationPlan): InvocationRecord => {
+    diagnostics.record('invocation-register');
     const controller = new AbortController();
     const record: InvocationRecord = {
       plan,
@@ -410,6 +415,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
     record.deadline.unref();
     renewLease(record);
     const cleanupFailed = (): void => {
+      diagnostics.record('cleanup-pending');
       clearTimeout(record.deadline);
       clearTimeout(record.lease);
       admissionsOpen = false;
@@ -421,9 +427,13 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
       });
     };
     record.completion = Promise.resolve()
-      .then(() => backend.execute(plan, controller.signal))
+      .then(() => {
+        diagnostics.record('backend-start');
+        return backend.execute(plan, controller.signal);
+      })
       .then(
         (outcome) => {
+          diagnostics.record('backend-complete');
           if (outcome?.cleanupComplete === false) {
             cleanupFailed();
           } else if (outcome && isValidHostExecutorResult(outcome.outcome, outcome.result)) {
@@ -432,7 +442,10 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
             finish(record, 'executor-failure');
           }
         },
-        cleanupFailed,
+        (error: unknown) => {
+          diagnostics.record('backend-failed', error);
+          cleanupFailed();
+        },
       ).catch(() => {
         // Persistence failure leaves a nonterminal tombstone; no result may
         // escape and this run may admit no more work.
@@ -462,6 +475,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
       admissionsOpen = false;
       throw new RequestRejection('closed');
     }
+    diagnostics.record('invoke-plan');
     return launch(deriveHostExecutorInvocationPlan(runState, request));
   };
 
@@ -490,6 +504,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
       // Settlement is the broker's acknowledgement; the host no longer
       // retains the result payload afterwards.
       record.result = undefined;
+      diagnostics.record('settled');
     }
   };
 
@@ -531,6 +546,10 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
         ...view(record),
       };
     } catch (error) {
+      diagnostics.record(
+        error instanceof RequestRejection ? error.diagnosticPhase ?? 'request-rejected' : 'request-rejected',
+        error, error instanceof RequestRejection ? error.code : undefined,
+      );
       if (!(error instanceof RequestRejection)) {
         admissionsOpen = false;
         for (const record of invocations.values()) interrupt(record, 'cancelled');
@@ -542,7 +561,10 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
   const processFrame = (payload: Buffer): Buffer => {
     if (closing) return canonicalDeniedResponse();
     const decoded = decodeHostExecutorRequest(payload, { capability, runId: runState.runId });
-    if (!decoded.ok) return canonicalDeniedResponse();
+    if (!decoded.ok) {
+      diagnostics.record('request-rejected', new Error('Invalid authenticated request'), 'denied');
+      return canonicalDeniedResponse();
+    }
     return encodeHostExecutorResponse(handle(decoded.request));
   };
 
@@ -623,6 +645,7 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
     },
     close(): Promise<void> {
       if (closePromise) return closePromise;
+      diagnostics.record('shutdown');
       closing = true;
       admissionsOpen = false;
       for (const record of invocations.values()) {

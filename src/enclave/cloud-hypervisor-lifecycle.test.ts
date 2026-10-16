@@ -8,7 +8,7 @@ import type { HostExecutorServer } from './host-executor-server';
 import { assertAgentRuntimeAvailable, assertScriptRuntimeAvailable } from './runtime-preflight';
 import { startCloudHypervisorEnclaveHostService } from './cloud-hypervisor-host-service';
 import { getEnclaveStartupProgress } from './startup-progress';
-import { HostExecutorInvocationDiagnostics } from './host-executor-journal';
+import { HostExecutorInvocationDiagnostics, HostExecutorControlDiagnostics } from './host-executor-journal';
 import { HostPreflightReporter } from '../cloud-hypervisor/host-preflight-progress';
 import type { HostExecutorInvocationPlan } from './host-executor-server';
 import * as cloudHypervisorManager from '../cloud-hypervisor/manager';
@@ -355,13 +355,15 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     await expect(startCloudHypervisorEnclaveLifecycle(config, provider)).rejects.toThrow(/already exists/);
   });
 
-  it('exports protected invocation evidence even when host shutdown rejects', async () => {
+  it('exports protected invocation and pre-launch control evidence even when host shutdown rejects', async () => {
     const dependencies = cloudHypervisorManager.resolveCloudHypervisorManagerDependencies();
     jest.spyOn(cloudHypervisorManager, 'resolveCloudHypervisorManagerDependencies').mockReturnValue({
       ...dependencies, resolveIdentity: () => ({ uid: process.getuid!(), gid: process.getgid!() }),
     });
     await startCloudHypervisorEnclaveLifecycle(config, provider, {});
     const run = deriveCloudHypervisorEnclaveRunState(config, resolveEnclavePaths(workDir));
+    const control = new HostExecutorControlDiagnostics(run);
+    control.record('plan-entry-policy', new Error('PRIVATE_REQUEST_BYTES'), 'denied');
     const diagnostic = new HostExecutorInvocationDiagnostics(run, {
       runId, entryId: 'script', invocationId: 'b'.repeat(32), executorKind: 'script',
     } as HostExecutorInvocationPlan);
@@ -372,7 +374,8 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     const cleanupError = Object.assign(new Error('SECRET Bearer token'), { code: 'EIO' });
     const directory = path.join(workDir, 'audit', 'diagnostics', 'cloud-hypervisor', 'host-executor');
     (server.close as jest.Mock).mockImplementation(async () => {
-      const [before] = fs.readdirSync(directory);
+      const before = fs.readdirSync(directory).find(name =>
+        JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')).invocationId)!;
       expect(JSON.parse(fs.readFileSync(path.join(directory, before), 'utf8'))).toMatchObject({
         failure: { stage: 'host-invocation/manager-start', code: 'EPERM' },
       });
@@ -381,8 +384,16 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     });
     await expect(stopCloudHypervisorEnclaveLifecycle(config)).rejects.toThrow('shutdown uncertain');
     const files = fs.readdirSync(directory);
-    expect(files).toHaveLength(1);
-    const file = path.join(directory, files[0]);
+    expect(files).toHaveLength(2);
+    const controlFile = files.find(name =>
+      JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')).component === 'host-executor-control')!;
+    const controlContents = fs.readFileSync(path.join(directory, controlFile), 'utf8');
+    expect(JSON.parse(controlContents)).toMatchObject({
+      failure: { phase: 'plan-entry-policy', reason: 'denied' },
+    });
+    expect(controlContents).not.toContain('PRIVATE_REQUEST_BYTES');
+    const invocationFile = files.find(name => name !== controlFile)!;
+    const file = path.join(directory, invocationFile);
     const contents = fs.readFileSync(file, 'utf8');
     expect(JSON.parse(contents)).toMatchObject({
       failure: { stage: 'host-invocation/manager-start', code: 'EPERM' },
@@ -391,7 +402,10 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     expect(contents).not.toMatch(/SECRET|Bearer|token|request\/script\/repository/);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
-    expect(fs.existsSync(path.join(run.journalDir!, 'diagnostics', files[0]))).toBe(true);
+    for (const name of files) {
+      expect(fs.existsSync(path.join(run.journalDir!, 'diagnostics', name))).toBe(true);
+      expect(fs.statSync(path.join(directory, name)).mode & 0o777).toBe(0o600);
+    }
     expect(storage.close).not.toHaveBeenCalled();
   });
 
