@@ -10,7 +10,7 @@ COPY enclave/script-entrypoint.py /usr/local/bin/run-enclave-script
 RUN chmod 0555 /usr/local/bin/run-enclave-script \
     && mkdir -p /script /awf/seed
 
-FROM node:24.18.1-trixie-slim@sha256:ac39e4b5fcb2b1b34b20364fd58b2e898f3bb80731ee6f62a7536f9df3d6aadc AS enclave-agent-build
+FROM node:26.11.1-trixie-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0 AS enclave-agent-build
 
 ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
 COPY enclave/package*.json /tmp/copilot-cli/
@@ -30,7 +30,7 @@ RUN npm_config_ignore_scripts=false npm ci --prefix /tmp/copilot-cli --install-s
 FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7 AS enclave-agent
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates git python3 ripgrep \
+    && apt-get install -y --no-install-recommends bash ca-certificates git libatomic1 python3 ripgrep \
     && test -r /etc/ssl/certs/ca-certificates.crt \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/bin/apt /usr/bin/apt-get /usr/bin/apt-cache
@@ -39,7 +39,7 @@ COPY --from=enclave-agent-build /usr/local/lib/node_modules/@github/copilot/ /us
 # Avoid uutils env's executable-name check on shebangs under BuildKit's QEMU.
 RUN sed -i '1c#!/usr/local/bin/node' /usr/local/lib/node_modules/@github/copilot/npm-loader.js \
     && ln -s ../lib/node_modules/@github/copilot/npm-loader.js /usr/local/bin/copilot \
-    && node --version | grep -qE '^v24\.' \
+    && node --version | grep -qE '^v26\.' \
     && COPILOT_CLI_VERSION="$(node -p 'require("/usr/local/lib/node_modules/@github/copilot/package.json").version')" \
     && copilot --version | grep -q "GitHub Copilot CLI ${COPILOT_CLI_VERSION}" \
     && rm -f /usr/bin/pebble \
@@ -51,7 +51,7 @@ RUN chmod 0555 /usr/local/bin/run-enclave-agent \
     && mkdir -p /agent /awf/seed /run/awf-enclave-github \
     && ! command -v gh
 
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS enclave-mcp-server
+FROM node:26.11.1-alpine3.24@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS enclave-mcp-server
 
 ARG AWF_SOURCE_REVISION=unavailable
 
