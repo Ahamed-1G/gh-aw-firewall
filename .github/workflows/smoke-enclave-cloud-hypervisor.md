@@ -161,7 +161,15 @@ version checks remain enabled; development-build bypasses are not used.
 The MCP Gateway adopts the compiler's digest-pinned v0.4.33 default.
 An explicit v0.4.31 override was rejected by compile-only strict validation
 because `sandbox.mcp.version` is an internal field; no validation bypass is used.
-AWF, Copilot, and primary/enclave artifact versions remain unchanged.
+On main and release tags, AWF, Copilot, and primary/enclave artifact versions
+remain unchanged. Manual non-main branch runs instead build the checked-out
+host CLI and infrastructure containers, including the enclave MCP broker,
+using `--build-local`. They still use the verified v0.28.59 VM artifacts:
+no attestation, digest, or VM isolation checks are disabled.
+The branch runtime emits `enclave-host-executor.jsonl` in the protected audit,
+plus a durable `host-executor-control` snapshot covering pre-launch failures.
+New script-entrypoint diagnostics require a subsequent release-attested rootfs;
+branch runs must not pretend the published guest includes unshipped changes.
 This update does not publish a release or authorize a live run.
 This is diagnostic enablement, not a verified fix for the original host-executor
 launch failure; that failure remains untested with this release.
@@ -296,39 +304,40 @@ this pin update does not dispatch or authorize one.
 
 ### Trust model
 
-The updated acceptance policy authorizes two exact execution paths:
-1. **Reviewed workflow on `main` (`refs/heads/main`)**: allows testing an
-   independently pinned published AWF release, breaking the circular dependency
-   where a release could not pin its own tag before publishing. Requires:
+The acceptance policy authorizes two exact execution paths:
+1. **Manually selected branch in the official repository**: `main` tests the
+   published release; other branches build the checked-out CLI and infrastructure
+   containers so a PR's head branch can be tested before merging. Requires:
    - Official repository: `github/gh-aw-firewall`
    - Manual event: `workflow_dispatch`
    - Verified commit provenance: valid 40-character hex `GITHUB_SHA`, matching
      `GITHUB_WORKFLOW_SHA` when present
    - Exact official workflow lock:
      `github/gh-aw-firewall/.github/workflows/smoke-enclave-cloud-hypervisor.lock.yml`
-     at `@refs/heads/main` or `@${GITHUB_SHA}`
-   - Exact ref identity: `GITHUB_REF` is `refs/heads/main`, `GITHUB_REF_TYPE` is
-     `branch`, `GITHUB_REF_NAME` is `main`
+     at `@${GITHUB_REF}` or `@${GITHUB_SHA}`
+   - Exact ref identity: `GITHUB_REF` is `refs/heads/${GITHUB_REF_NAME}` and
+     `GITHUB_REF_TYPE` is `branch`, with a nonempty branch name
 2. **Approved tagged workflow**: maintains the existing approved path on an
    official release tag (`refs/tags/vX.Y.Z`) where `GITHUB_REF_NAME` matches the
    verified `artifactReleaseTag`.
 
 Both paths enforce strict fail-closed constraints:
-- All pull requests (`refs/pull/*`), non-main branches, forks, and automated events are rejected.
+- Pull request events/merge refs (`refs/pull/*`), forks, and automated events are
+  rejected. Select the same-repository PR head branch in a manual dispatch instead.
 - Exactly one public script enclave for `github/gh-aw-firewall` with Cloud Hypervisor runtime and a single invocation.
 - Agent enclaves, dynamic admission, custom script images, and private repository fixtures are rejected.
 - Release-attested artifacts with mutually matching release identities; unattested developer overrides are rejected.
 
 ### Remaining manual dispatch prerequisite
 
-First resolve the remaining scanner/live-validation gates above. Then merge this
-reviewed workflow update to `main` and obtain separate live-run
-authorization. No further release or retag is required: the binary, images,
-and attested artifacts are pinned to the policy-containing published v0.28.59.
-Only after all prerequisites are satisfied, dispatch with:
+No further release or retag is required for manual branch iteration: the
+branch builds its own CLI and broker while keeping the attested v0.28.59
+VM artifacts. Main/tag runs continue to select the published binary/images.
+With explicit live-run authorization, select main or a same-repository PR head:
 
 ```bash
 gh aw run smoke-enclave-cloud-hypervisor --ref main
+gh aw run smoke-enclave-cloud-hypervisor --ref your-pr-head-branch
 ```
 
 Do not retag v0.28.59 or bypass the acceptance gate. The runner must be

@@ -50,6 +50,7 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
   const cleaned = jest.fn();
   const auditFailure = jest.fn();
   const auditInvocation = jest.fn();
+  const auditLifecycle = jest.fn();
   const plans: Array<{ entryId: string; invocationId: string; admissionId: string; executorKind: string }> = [];
   const requests: Array<Record<string, unknown>> = [];
   const journalEvents: string[] = [];
@@ -82,7 +83,7 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     journalEvents.length = 0;
     lifecycleEvents.length = 0;
     activeHandlers.length = 0;
-    for (const spy of [started, stopped, cancelled, cleaned, auditFailure, auditInvocation]) spy.mockClear();
+    for (const spy of [started, stopped, cancelled, cleaned, auditFailure, auditInvocation, auditLifecycle]) spy.mockClear();
     runState = {
       runId,
       seedsDir: path.join(root, 'seeds'),
@@ -267,6 +268,7 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     };
     const runner = createHostExecutorRunner(config, {
       nowMs: clock.nowMs, pollMs: 2, drainMs: 1000, requestTimeoutMs: 1000,
+      audit: { lifecycle: auditLifecycle },
     });
     const localWorkspace = {
       createInvocationWorkspace: jest.fn(() => { throw new Error('Local workspace must not be used'); }),
@@ -413,12 +415,55 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     await expect(runner.reconcileRun()).rejects.toThrow(/unresolved/);
     expect(started).not.toHaveBeenCalled();
     expect(plans).toHaveLength(0);
+    expect(auditLifecycle).toHaveBeenCalledWith('host-executor', expect.objectContaining({
+      operation: 'status', phase: 'socket', status: 'failed', code: 'ENOENT',
+    }));
+  });
+
+  it.each([
+    ['truncate', 'invoke', 'response-truncated'],
+    ['digest', 'digest', 'digest-mismatch'],
+    ['schema', 'schema', 'schema-mismatch'],
+    ['settle', 'settle', 'response-malformed'],
+  ] as const)('retains protected phase evidence for %s without changing the finite error', async (failure, phase, reason) => {
+    corrupt = failure;
+    const { handler, runner } = makeHandler('script');
+    expect(await call(handler, args('script'))).toBe('{"status":"error"}');
+    expect(auditLifecycle).toHaveBeenCalledWith('host-executor', expect.objectContaining({
+      phase, reason, status: 'failed',
+    }));
+    await expect(runner.reconcileRun()).rejects.toThrow('Host executor lifecycle is unresolved');
+    await assertPrivateDiagnostics();
+  });
+
+  it('identifies local invoke validation without logging the rejected bytes or launching', async () => {
+    const { runner } = makeHandler('script');
+    await expect(runner.runInvocation({
+      invocationId: 'c'.repeat(32), seedId: 'PRIVATE_SEED', payload: 'PRIVATE_PAYLOAD',
+      schema, admissionId: 'd'.repeat(32), executorKind: 'script',
+      deadlineMs: performance.now() + 5000,
+    })).rejects.toThrow('Host executor lifecycle is unresolved');
+    expect(auditLifecycle).toHaveBeenCalledWith('host-executor', expect.objectContaining({
+      phase: 'invoke', status: 'failed', reason: 'invalid-seedId',
+    }));
+    expect(plans).toHaveLength(0);
+    expect(JSON.stringify(auditLifecycle.mock.calls)).not.toMatch(/PRIVATE_|payload|capability/);
   });
 
   it.each(['script', 'agent'] as const)('denies host policy mismatch for %s without fallback', async (role) => {
     const { handler } = makeHandler(role, { entryId: role === 'script' ? 'agent-entry' : 'script-entry' });
     expect(await call(handler, args(role))).toBe('{"status":"error"}');
     expect(plans).toHaveLength(0);
+    expect(auditLifecycle).toHaveBeenCalledWith('host-executor', expect.objectContaining({
+      operation: 'invoke', phase: 'response', reason: 'denied',
+    }));
+    const files = await fs.readdir(path.join(root, 'journal', 'diagnostics'));
+    const snapshots = await Promise.all(files.map(async (file) =>
+      JSON.parse(await fs.readFile(path.join(root, 'journal', 'diagnostics', file), 'utf8'))));
+    expect(snapshots).toEqual(expect.arrayContaining([expect.objectContaining({
+      component: 'host-executor-control',
+      failure: expect.objectContaining({ phase: 'plan-entry-policy', reason: 'denied' }),
+    })]));
   });
 
   it.each(['script', 'agent'] as const)('does not disclose raw %s output or errors', async (role) => {
@@ -435,6 +480,7 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     const diagnostics = JSON.stringify({
       failures: auditFailure.mock.calls,
       invocations: auditInvocation.mock.calls,
+      lifecycle: auditLifecycle.mock.calls,
     }) + journal;
     expect(diagnostics).not.toMatch(/PRIVATE_RAW|Return true|"payload"|"capability"/);
   }
@@ -549,8 +595,11 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
 
   it.each(['script', 'agent'] as const)('cancels and settles %s at the broker deadline', async (role) => {
     hanging = true;
-    const { handler } = makeHandler(role, { timeoutSeconds: 0.5 });
-    expect(await call(handler, args(role))).toBe('{"status":"error"}');
+    const { handler } = makeHandler(role, { timeoutSeconds: 5 });
+    const pending = call(handler, args(role));
+    await until(() => resolveExecution !== undefined);
+    offset += 6000;
+    expect(await pending).toBe('{"status":"error"}');
     expect(cancelled).toHaveBeenCalled();
     expect(requests.map(({ type }) => type)).toContain('settle');
   });

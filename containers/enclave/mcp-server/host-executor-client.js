@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const net = require('net');
+const { performance } = require('perf_hooks');
 const { strictParseJson } = require('../../bounded-execution/finite-disclosure');
 
 /**
@@ -153,7 +154,7 @@ function frame(payload) {
   return Buffer.concat([header, payload]);
 }
 
-function exchange(socketPath, payload, timeoutMs) {
+function exchange(socketPath, payload, timeoutMs, diagnose) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     const chunks = [];
@@ -169,7 +170,12 @@ function exchange(socketPath, payload, timeoutMs) {
     };
     const deadline = setTimeout(() => done(new Error('Host executor request timed out')), timeoutMs);
     socket.setTimeout(timeoutMs, () => done(new Error('Host executor request timed out')));
-    socket.on('error', () => done(new Error('Host executor is unavailable')));
+    socket.on('error', (error) => {
+      const code = new Set(['ENOENT', 'ECONNREFUSED', 'ECONNRESET', 'EACCES', 'EPERM', 'EPIPE'])
+        .has(error.code) ? error.code : 'unknown';
+      diagnose({ phase: 'socket', status: 'failed', code });
+      done(new Error('Host executor is unavailable'));
+    });
     socket.on('data', (chunk) => {
       received += chunk.length;
       if (received > FRAME_HEADER_BYTES + MAX_RESPONSE_BYTES) {
@@ -191,14 +197,18 @@ function exchange(socketPath, payload, timeoutMs) {
       }
       done(undefined, buffer.subarray(FRAME_HEADER_BYTES));
     });
-    socket.on('connect', () => socket.end(frame(payload)));
+    socket.on('connect', () => {
+      diagnose({ phase: 'socket', status: 'connected' });
+      socket.end(frame(payload));
+    });
   });
 }
 
 /**
  * Creates a client bound to one run's socket and capability.
  *
- * @param {{ socketPath: string, capabilityPath: string, runId: string, timeoutMs?: number }} options
+ * onDiagnostic is trusted broker-only wiring, never a caller-selected sink.
+ * @param {{ socketPath: string, capabilityPath: string, runId: string, timeoutMs?: number, onDiagnostic?: function }} options
  */
 function createHostExecutorClient(options) {
   const { socketPath, capabilityPath, runId } = options;
@@ -214,6 +224,9 @@ function createHostExecutorClient(options) {
       throw new Error('Host executor request entryId is invalid');
     }
     assertPattern('invocationId', invocationId, ID_PATTERN);
+    const diagnose = (record) => options.onDiagnostic?.({
+      operation: type, invocationId, ...record,
+    });
     const requestId = crypto.randomBytes(16).toString('hex');
     const request = {
       version: PROTOCOL_VERSION,
@@ -227,7 +240,31 @@ function createHostExecutorClient(options) {
     };
     const payload = Buffer.from(JSON.stringify(request), 'utf8');
     if (payload.length > MAX_REQUEST_BYTES) throw new Error('Host executor request is oversized');
-    const response = parseHostExecutorResponse(await exchange(socketPath, payload, timeoutMs), requestId);
+    const started = performance.now();
+    diagnose({ phase: 'exchange', status: 'started' });
+    let bytes;
+    try {
+      bytes = await exchange(socketPath, payload, timeoutMs, diagnose);
+    } catch (error) {
+      const reasons = new Map([
+        ['Host executor request timed out', 'timeout'],
+        ['Host executor is unavailable', 'unavailable'],
+        ['Host executor response is oversized', 'oversized'],
+        ['Host executor response is truncated', 'truncated'],
+        ['Host executor response is malformed', 'malformed'],
+      ]);
+      diagnose({ phase: 'exchange', status: 'failed',
+        reason: reasons.get(error.message) || 'unknown',
+        elapsedMs: Math.max(0, Math.round(performance.now() - started)) });
+      throw error;
+    }
+    const response = parseHostExecutorResponse(bytes, requestId);
+    diagnose({ phase: 'response', status: response ? 'parsed' : 'failed',
+      elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+      ...(response ? response.ok
+        ? { state: response.state, cancelGeneration: response.cancelGeneration,
+            ...(response.outcome ? { outcome: response.outcome } : {}) }
+        : { reason: response.error } : { reason: 'malformed' }) });
     if (!response) throw new Error('Host executor response is malformed');
     if (response.ok && response.invocationId !== invocationId) {
       throw new Error('Host executor response is malformed');

@@ -49,6 +49,16 @@ export function buildLocalInstallSteps(indent: string): string {
   ].join('\n') + '\n';
 }
 
+export function buildBranchEnclaveInstallSteps(indent: string): string {
+  const condition = "github.event_name == 'workflow_dispatch' && github.repository == 'github/gh-aw-firewall' && github.ref_type == 'branch' && github.ref != 'refs/heads/main'";
+  return buildLocalInstallSteps(indent)
+    .split('\n')
+    .flatMap(line => line.startsWith(`${indent}- name:`)
+      ? [line, `${indent}  if: ${condition}`] : [line])
+    .join('\n')
+    .replace('/dist/cli.js" "\\$@"', '/dist/cli.js" --build-local "\\$@"');
+}
+
 // Builds the replacement step that copies session state from the AWF-managed
 // host path (populated via --session-state-dir) into the agent logs directory
 // so it is captured by the existing artifact upload step.

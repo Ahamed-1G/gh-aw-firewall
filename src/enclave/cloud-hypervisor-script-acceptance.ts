@@ -67,18 +67,18 @@ export function isCloudHypervisorScriptAcceptanceWorkflow(
     && ref === `refs/tags/${refName}`
     && workflowRef === `${ACCEPTANCE_WORKFLOW_PATH}@${ref}`;
 
-  const isMainAcceptance =
+  const isBranchAcceptance =
     refType === 'branch'
-    && refName === 'main'
-    && ref === 'refs/heads/main'
+    && refName.length > 0
+    && ref === `refs/heads/${refName}`
     && SHA_PATTERN.test(sha)
     && (workflowSha === undefined || workflowSha === sha)
     && (
-      workflowRef === `${ACCEPTANCE_WORKFLOW_PATH}@refs/heads/main`
+      workflowRef === `${ACCEPTANCE_WORKFLOW_PATH}@${ref}`
       || workflowRef === `${ACCEPTANCE_WORKFLOW_PATH}@${sha}`
     );
 
-  if (!isTaggedAcceptance && !isMainAcceptance) {
+  if (!isTaggedAcceptance && !isBranchAcceptance) {
     return false;
   }
 

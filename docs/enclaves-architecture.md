@@ -362,8 +362,15 @@ with release-matched images and attested primary and script guest artifacts.
 That release includes the host and server diagnostics changes and the reviewed
 official-main acceptance policy. Once the workflow pin update merges to `main`,
 a separately authorized manual run can exercise this release without another
-release or retag. This does not establish passing live acceptance; local builds
-must not silently replace that release-attested verification path.
+release or retag. This does not establish passing live acceptance.
+The current smoke preserves published binary/image selection on main and tags.
+For explicitly dispatched non-main branches in `github/gh-aw-firewall`, it
+instead builds the checked-out host CLI and infrastructure containers with
+`--build-local`, including the broker's protected control diagnostics. This
+supports PR-head iteration without accepting pull-request events, merge refs,
+forks, or automated events. Both modes retain the verified published VM
+artifacts and all single-public-script isolation limits. Guest-entrypoint
+changes still require rebuilt release-attested guest artifacts.
 
 After primary-agent work stops, AWF gives the enclave server a bounded
 4860-second stop grace. The server closes admissions, drains its single execution

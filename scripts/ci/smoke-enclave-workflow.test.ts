@@ -504,8 +504,18 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(lock).toContain('https://github.com/github/gh-aw-firewall/releases/download/v0.28.59/awf-config.schema.json');
     expect(lock).toContain('Download and verify cloud-hypervisor enclave artifacts');
     expect(lock).toContain('cloud_hypervisor_setup_enclave_artifacts.sh');
-    expect(lock).not.toContain('Install awf binary (local)');
-    expect(lock).not.toContain('--build-local');
+    const compiled = yaml.load(lock) as {
+      jobs: { agent: { steps: Array<{ name?: string; if?: string; run?: string }> } };
+    };
+    const branchSteps = compiled.jobs.agent.steps.filter(step =>
+      ['Setup Node.js', 'Install awf dependencies', 'Build awf', 'Install awf binary (local)'].includes(step.name ?? ''));
+    expect(branchSteps).toHaveLength(4);
+    for (const step of branchSteps) {
+      expect(step.if).toBe("github.event_name == 'workflow_dispatch' && github.repository == 'github/gh-aw-firewall' && github.ref_type == 'branch' && github.ref != 'refs/heads/main'");
+    }
+    expect(branchSteps[3].run).toContain('/dist/cli.js" --build-local "\\$@"');
+    expect(lock).toContain('exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" --build-local');
+    expect(countOccurrences(lock, '--build-local')).toBe(1);
     expect(source).not.toContain('Do not dispatch this update yet');
     expect(source).toContain('installed host\nbinary authorizes this path');
     expect(source).toContain('Do not retag v0.28.59 or bypass the acceptance gate.');
@@ -514,8 +524,10 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(source).toContain('After this update merges to `main`');
     expect(source).toContain('### Remaining manual dispatch prerequisite');
     expect(source).toContain('No further release or retag is required');
-    expect(source).toContain('separate live-run\nauthorization');
+    expect(source).toContain('explicit live-run authorization');
     expect(source).toContain('gh aw run smoke-enclave-cloud-hypervisor --ref main');
+    expect(source).toContain('gh aw run smoke-enclave-cloud-hypervisor --ref your-pr-head-branch');
+    expect(source).toContain('New script-entrypoint diagnostics require a subsequent release-attested rootfs');
   });
 
   it('uses one real gateway with late enclave discovery and host authentication', () => {
@@ -739,12 +751,12 @@ pathlib.Path("/query/out").write_text(json.dumps(result), encoding="utf-8")`);
     expect(source).toContain('do not retry the enclave call or invoke a safe output');
   });
 
-  it('documents the exact official-main guard without relaxing production gates', () => {
+  it('documents manual branch iteration without relaxing the other production gates', () => {
     expect(source).toContain('Official repository: `github/gh-aw-firewall`');
     expect(source).toContain('Manual event: `workflow_dispatch`');
     expect(source).toContain('matching\n     `GITHUB_WORKFLOW_SHA` when present');
-    expect(source).toContain('at `@refs/heads/main` or `@${GITHUB_SHA}`');
-    expect(source).toContain('All pull requests (`refs/pull/*`), non-main branches, forks, and automated events are rejected.');
+    expect(source).toContain('at `@${GITHUB_REF}` or `@${GITHUB_SHA}`');
+    expect(source).toContain('Pull request events/merge refs (`refs/pull/*`), forks, and automated events are');
     expect(source).toContain('unattested developer overrides are rejected.');
     expect(source).toContain('primary and every enclave invocation must use separate VMs');
   });
@@ -757,6 +769,8 @@ pathlib.Path("/query/out").write_text(json.dumps(result), encoding="utf-8")`);
 
   it('adds the host staging-token exclusion to the primary agent command', () => {
     const compiled = [
+      '      - name: Install AWF binary',
+      '        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.28.59',
       '              "awf-enclave": {',
       '                "type": "http",',
       '                "url": "http://awf-enclave-mcp:8080/mcp"',
