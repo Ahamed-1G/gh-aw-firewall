@@ -612,12 +612,12 @@ jobs:
           JS
 
       - name: Install the Copilot CLI used by gh-aw
-        env:
-          # Keep in step with gh-aw's DefaultCopilotVersion.
-          COPILOT_CLI_VERSION: 1.0.89
         run: |
           set -euo pipefail
-          npm install --global --no-audit --no-fund "@github/copilot@${COPILOT_CLI_VERSION}"
+          npm ci --prefix "${GITHUB_WORKSPACE}/scripts/ci/copilot-cli" --no-audit --no-fund
+          COPILOT_CLI_BIN="${GITHUB_WORKSPACE}/scripts/ci/copilot-cli/node_modules/.bin"
+          echo "$COPILOT_CLI_BIN" >> "$GITHUB_PATH"
+          export PATH="${COPILOT_CLI_BIN}:${PATH}"
           copilot --version
 
       - name: Run the Copilot CLI agent on the routed selection
