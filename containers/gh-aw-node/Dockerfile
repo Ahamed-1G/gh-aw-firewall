@@ -6,7 +6,7 @@
 #
 # Security patches applied in this build:
 #
-#   libcrypto3/libssl3 >= 3.5.7: resolved by using node:22.23.2-alpine3.24
+#   libcrypto3/libssl3 >= 3.5.7: resolved by using node:26.11.1-alpine3.24
 #     and running `apk upgrade --no-cache` to pull in the latest Alpine 3.24
 #     security-patched builds of openssl.
 #
@@ -19,7 +19,7 @@
 #
 #   curl >= 8.21.0-r0 (CVE-2026-8924/8925/8926/8927/9079/10536/11564/11856):
 #     resolved by pinning the apk constraint below.
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85
+FROM node:26.11.1-alpine3.24@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a
 
 # Install curl for healthchecks and the npm tarball download below.
 # Pin >= 8.21.0-r0 to fix CVE-2026-8924/8925/8926/8927/9079/10536/11564/11856
@@ -28,7 +28,7 @@ FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586
 RUN apk upgrade --no-cache && \
     apk add --no-cache "curl>=8.21.0-r0" git
 
-# Replace Node's bundled npm 10.x with npm 11.18.0.
+# Replace Node's bundled npm with npm 11.18.0.
 # Install from the registry tarball (same method as the api-proxy image) for a clean
 # replacement -- avoids leaving stale npm 10.x bundles in the image layers.
 RUN set -eux; \
@@ -43,7 +43,7 @@ RUN set -eux; \
              /usr/local/lib/node_modules/npm/bin/npx-cli.js; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    node --version | grep -qE '^v22\.23\.2' || (echo "ERROR: expected Node.js v22.23.2" && exit 1); \
+    node --version | grep -qE '^v26\.11\.1' || (echo "ERROR: expected Node.js v26.11.1" && exit 1); \
     npm --version | grep -qE '^11\.18\.0' || (echo "ERROR: expected npm 11.18.0" && exit 1); \
     rm -f /tmp/npm-11.18.0.tgz
 
