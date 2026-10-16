@@ -49,6 +49,21 @@
           "cacheWrite": 2.5,
           "output": 10,
           "reasoning": 10
+        },
+        "gpt-6.1-sol": {
+          "input": 2,
+          "cachedInput": 0.1,
+          "cacheWrite": 2.5,
+          "output": 10,
+          "reasoning": 10,
+          "longContext": {
+            "threshold": 272000,
+            "input": 4,
+            "cachedInput": 0.2,
+            "cacheWrite": 5,
+            "output": 15,
+            "reasoning": 15
+          }
         }
       }
     },
