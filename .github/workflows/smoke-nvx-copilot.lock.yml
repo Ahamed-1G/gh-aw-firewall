@@ -42,9 +42,9 @@
 #   - github/gh-aw-actions/setup@458b269006dcf88e3b5496b6fbecabe4b9a0f954 # v0.92.0
 #
 # Container images used:
-#   -
-#   -
-#   -
+#   - ghcr.io/github/gh-aw-firewall/agent:0.28.54@sha256:fc4f3d07d9f0479aa76d4a6d55f36735c29e0558f10a413fbd36e3d00b34a830
+#   - ghcr.io/github/gh-aw-firewall/api-proxy:0.28.54@sha256:f8dff30ac37a8987b564f2872796a9c093b3ab281b1cdfc3493c1ea5fa84ff79
+#   - ghcr.io/github/gh-aw-firewall/squid:0.28.54@sha256:960930db796d005e63153b9ffd984b58ebda1ed8c26800c09eb7515dc94237db
 #   - ghcr.io/github/gh-aw-mcpg:v0.4.31@sha256:dbec0f2ddef6adf83b7764019323096e3e5cc0f3886255f6320555b7fe2a7caf
 #   - ghcr.io/github/gh-aw-node@sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f
 #   - ghcr.io/github/github-mcp-server:v2.0.2@sha256:ffced0d76e77428532a2ced185516992d77fd146d69eec2f244e6237d1a97796
@@ -252,6 +252,13 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') && github.event.pull_request != null && github.event.pull_request.base.sha || github.sha }}
+          sparse-checkout: |
+            .github
+            .agents
+            .claude
+            .codex
+            .gemini
+            .pi
           sparse-checkout-cone-mode: true
           fetch-depth: 1
       - name: Save agent config folders for base branch restoration
@@ -620,36 +627,8 @@ jobs:
           GH_HOST: github.com
           GH_AW_COMPILED_VERSION: v0.92.0
           GH_AW_COPILOT_GUEST_LIBC: musl
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
-      - name: Install awf dependencies
-        run: npm ci
-      - name: Build awf
-        run: npm run build
-      - name: Install awf binary (local)
-        run: |
-          WORKSPACE_PATH="${GITHUB_WORKSPACE:-$(pwd)}"
-          NODE_BIN="$(command -v node)"
-          if [ ! -d "$WORKSPACE_PATH" ]; then
-            echo "Workspace path not found: $WORKSPACE_PATH"
-            exit 1
-          fi
-          if [ ! -x "$NODE_BIN" ]; then
-            echo "Node binary not found: $NODE_BIN"
-            exit 1
-          fi
-          if [ ! -d "/usr/local/bin" ]; then
-            echo "/usr/local/bin is missing"
-            exit 1
-          fi
-          sudo tee /usr/local/bin/awf > /dev/null <<EOF
-          #!/bin/bash
-          exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" "\$@"
-          EOF
-          sudo chmod +x /usr/local/bin/awf
+      - name: Install AWF binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.28.54
       - name: Determine automatic lockdown mode for GitHub MCP Server
         id: determine-automatic-lockdown
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -690,7 +669,7 @@ jobs:
           GH_AW_NVX_SIGNER_WORKFLOW: "github/gh-aw-firewall/.github/workflows/smoke-nvx-copilot.lock.yml"
         run: bash "${RUNNER_TEMP}/gh-aw/actions/nvx_host_preflight.sh"
       - name: Download container images
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-mcpg:v0.4.31@sha256:dbec0f2ddef6adf83b7764019323096e3e5cc0f3886255f6320555b7fe2a7caf ghcr.io/github/gh-aw-node@sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f ghcr.io/github/github-mcp-server:v2.0.2@sha256:ffced0d76e77428532a2ced185516992d77fd146d69eec2f244e6237d1a97796
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.28.54@sha256:fc4f3d07d9f0479aa76d4a6d55f36735c29e0558f10a413fbd36e3d00b34a830 ghcr.io/github/gh-aw-firewall/api-proxy:0.28.54@sha256:f8dff30ac37a8987b564f2872796a9c093b3ab281b1cdfc3493c1ea5fa84ff79 ghcr.io/github/gh-aw-firewall/squid:0.28.54@sha256:960930db796d005e63153b9ffd984b58ebda1ed8c26800c09eb7515dc94237db ghcr.io/github/gh-aw-mcpg:v0.4.31@sha256:dbec0f2ddef6adf83b7764019323096e3e5cc0f3886255f6320555b7fe2a7caf ghcr.io/github/gh-aw-node@sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f ghcr.io/github/github-mcp-server:v2.0.2@sha256:ffced0d76e77428532a2ced185516992d77fd146d69eec2f244e6237d1a97796
       - name: Prepare Safe Outputs Directories
         run: |
           mkdir -p "${RUNNER_TEMP}/gh-aw/safeoutputs"
@@ -1094,7 +1073,7 @@ jobs:
           GH_AW_AWF_LOG_FILE=/tmp/gh-aw/agent-stdio.log \
           GH_AW_AWF_ATTEMPT_LOG_NAME=copilot \
           bash "${RUNNER_TEMP}/gh-aw/actions/run_awf_with_startup_retries.sh" -- \
-            sudo --preserve-env awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --session-state-dir /tmp/gh-aw/sandbox/agent/session-state --container-workdir /workspace --nvx-layer "${GH_AW_NVX_LAYER}" --nvx-openvmm "${GH_AW_NVX_OPENVMM}" --nvx-kernel "${GH_AW_NVX_KERNEL}" --nvx-initramfs "${GH_AW_NVX_INITRAMFS}" --nvx-artifact-manifest "${GH_AW_NVX_ARTIFACT_MANIFEST}" --nvx-artifact-manifest-bundle "${GH_AW_NVX_ARTIFACT_MANIFEST_BUNDLE}"  ${GH_AW_DOCKER_HOST:+--docker-host "$GH_AW_DOCKER_HOST"} --container-runtime nvx --nvx-preview --network-isolation --enable-api-proxy --env-all --exclude-env ACTIONS_ID_TOKEN_REQUEST_TOKEN --exclude-env ACTIONS_ID_TOKEN_REQUEST_URL --exclude-env COPILOT_GITHUB_TOKEN --exclude-env GH_AW_OTLP_ALL_HEADERS --exclude-env GH_AW_OTLP_ENDPOINTS --exclude-env GITHUB_MCP_SERVER_TOKEN --exclude-env MCP_GATEWAY_AGENT_ID --exclude-env OTEL_EXPORTER_OTLP_ENDPOINT --exclude-env OTEL_EXPORTER_OTLP_HEADERS --log-level info --session-state-dir /tmp/gh-aw/sandbox/agent/session-state --build-local \
+            sudo --preserve-env awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir /workspace --nvx-layer "${GH_AW_NVX_LAYER}" --nvx-openvmm "${GH_AW_NVX_OPENVMM}" --nvx-kernel "${GH_AW_NVX_KERNEL}" --nvx-initramfs "${GH_AW_NVX_INITRAMFS}" --nvx-artifact-manifest "${GH_AW_NVX_ARTIFACT_MANIFEST}" --nvx-artifact-manifest-bundle "${GH_AW_NVX_ARTIFACT_MANIFEST_BUNDLE}"  ${GH_AW_DOCKER_HOST:+--docker-host "$GH_AW_DOCKER_HOST"} --container-runtime nvx --nvx-preview --network-isolation --enable-api-proxy --env-all --exclude-env ACTIONS_ID_TOKEN_REQUEST_TOKEN --exclude-env ACTIONS_ID_TOKEN_REQUEST_URL --exclude-env COPILOT_GITHUB_TOKEN --exclude-env GH_AW_OTLP_ALL_HEADERS --exclude-env GH_AW_OTLP_ENDPOINTS --exclude-env GITHUB_MCP_SERVER_TOKEN --exclude-env MCP_GATEWAY_AGENT_ID --exclude-env OTEL_EXPORTER_OTLP_ENDPOINT --exclude-env OTEL_EXPORTER_OTLP_HEADERS --log-level info --session-state-dir /tmp/gh-aw/sandbox/agent/session-state --skip-pull \
             -- /bin/bash -c 'set +o histexpand; "/workspace/.gh-aw-nvx/gh-aw/bin/node" "/workspace/.gh-aw-nvx/gh-aw/actions/nvx_assets.cjs" guest '\''export PATH="/workspace/.gh-aw-nvx/gh-aw/mcp-cli/bin:$PATH" && if [ -n "${RUNNER_TOOL_CACHE:-}" ]; then GH_AW_TOOL_CACHE="$RUNNER_TOOL_CACHE"; GH_AW_TOOL_BINS="$(find "$GH_AW_TOOL_CACHE" -maxdepth 5 -type d -name bin 2>/dev/null | tr "\n" ":")"; GH_AW_TOOL_BINS="${GH_AW_TOOL_BINS%:}"; export PATH="$PATH${GH_AW_TOOL_BINS:+:}$GH_AW_TOOL_BINS"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; [ -n "$ERLANG_HOME" ] && export PATH="$ERLANG_HOME/bin:$PATH" || true; fi && GH_AW_NODE_EXEC="${GH_AW_NODE_BIN:-}"; if [ -z "$GH_AW_NODE_EXEC" ] || [ ! -x "$GH_AW_NODE_EXEC" ]; then GH_AW_NODE_EXEC="$(command -v node 2>/dev/null || true)"; fi; if [ -z "$GH_AW_NODE_EXEC" ]; then echo "node runtime missing on this runner — check runtimes.node in workflow YAML" >&2; exit 127; fi; GH_AW_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"; if [ -n "$GH_AW_NPM_GLOBAL_ROOT" ]; then export NODE_PATH="${GH_AW_NPM_GLOBAL_ROOT}${NODE_PATH:+:${NODE_PATH}}"; fi; "$GH_AW_NODE_EXEC" "/workspace/.gh-aw-nvx/gh-aw/actions/copilot_harness.cjs" "/workspace/.gh-aw-nvx/gh-aw/bin/copilot" --add-dir /tmp/gh-aw/ --log-level all --log-dir /tmp/gh-aw/sandbox/agent/logs/ --disable-builtin-mcps --no-ask-user --allow-tool github --allow-tool safeoutputs --allow-tool shell --allow-tool write --deny-tool workflow --allow-all-paths --add-dir "${GITHUB_WORKSPACE}" --prompt-file /tmp/gh-aw/aw-prompts/prompt.txt'\'''
         env:
           AWF_REFLECT_ENABLED: 1
@@ -1227,16 +1206,7 @@ jobs:
       - name: Copy Copilot session state files to logs
         if: always()
         continue-on-error: true
-        run: |
-          SESSION_STATE_SRC="/tmp/gh-aw/sandbox/agent/session-state"
-          LOGS_DIR="/tmp/gh-aw/sandbox/agent/logs"
-          if [ -d "$SESSION_STATE_SRC" ] && [ -n "$(ls -A "$SESSION_STATE_SRC" 2>/dev/null)" ]; then
-            mkdir -p "$LOGS_DIR/session-state"
-            cp -rp "$SESSION_STATE_SRC/." "$LOGS_DIR/session-state/"
-            echo "Copied session state to $LOGS_DIR/session-state"
-          else
-            echo "No session state found at $SESSION_STATE_SRC"
-          fi
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/copy_copilot_session_state.sh"
       - name: Stop MCP Gateway
         if: always()
         continue-on-error: true
