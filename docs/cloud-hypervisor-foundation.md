@@ -592,6 +592,21 @@ release or production use.
 
 ### Iterating on host code with released guests
 
+Script and agent enclave profiles explicitly default their supervisor listener
+to vsock port 1024 and reject ports below 1024. The supervisor drops
+`CAP_NET_BIND_SERVICE` before listening, so the primary VM's port 52 default
+cannot be reused for enclaves. The same profile port drives guest boot arguments
+and host readiness connections; the primary VM default is unchanged.
+
+`runtime.json` includes `guestConnection` diagnostics: target vsock port,
+attempt count, elapsed time, retry budget, final status and bounded last host
+transport error/code. This is host-observed state, not guest syscall evidence.
+Correlate it with the protected serial log to distinguish transport readiness
+failures from guest supervisor startup failures. Branch builds can add these
+host diagnostics without replacing the attested guest supervisor; distinguishing
+the guest's individual `socket`, `bind` and `listen` syscalls requires a newly
+attested supervisor with that instrumentation.
+
 `src/cloud-hypervisor/artifact-compatibility.json` records the exact reviewed
 guest artifact release supported by the source tree. This is distinct from the
 host package version: main retains a stale package version because release
@@ -656,6 +671,14 @@ identity is carried separately through the supervisor protocol and is never
 reused as the host VMM identity.
 
 ### virtiofsd confinement
+
+Each confinement record retains the host parent and discovered worker PID,
+process start time and executable independently of subsequent procfs reads.
+The `phase` identifies which inspection failed, and completed parent evidence
+is retained if worker inspection fails. Daemon logs also record the parent exit
+code/signal, elapsed time since launch and whether cleanup had begun. These
+diagnostics distinguish an early process disappearance from intentional teardown
+without exposing process environment values or relaxing confinement checks.
 
 AWF launches the pinned `virtiofsd` binary as root because its namespace
 sandbox must create the export mount tree, unshare namespaces, and pivot its
