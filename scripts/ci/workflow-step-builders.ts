@@ -17,7 +17,7 @@ export function buildLocalInstallSteps(indent: string): string {
 
   return [
     `${stepIndent}- name: Setup Node.js`,
-    `${runIndent}uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0`,
+    `${runIndent}uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0`,
     `${runIndent}with:`,
     `${scriptIndent}node-version: '24'`,
     `${scriptIndent}package-manager-cache: false`,
@@ -51,12 +51,28 @@ export function buildLocalInstallSteps(indent: string): string {
 
 export function buildBranchEnclaveInstallSteps(indent: string): string {
   const condition = "github.event_name == 'workflow_dispatch' && github.repository == 'github/gh-aw-firewall' && github.ref_type == 'branch' && github.ref != 'refs/heads/main'";
+  const scriptIndent = `${indent}    `;
+  const wrapper = [
+    'args=()',
+    'awf_options=true',
+    String.raw`for arg in "\$@"; do`,
+    String.raw`  if [ "\$awf_options" = true ] && [ "\$arg" = "--skip-pull" ]; then`,
+    '    continue',
+    '  fi',
+    String.raw`  if [ "\$arg" = "--" ]; then awf_options=false; fi`,
+    String.raw`  args+=("\$arg")`,
+    'done',
+    'exec "${NODE_BIN}" "${WORKSPACE_PATH}/dist/cli.js" --build-local "\\${args[@]}"',
+  ].map(line => scriptIndent + line).join('\n');
   return buildLocalInstallSteps(indent)
     .split('\n')
     .flatMap(line => line.startsWith(`${indent}- name:`)
       ? [line, `${indent}  if: ${condition}`] : [line])
     .join('\n')
-    .replace('/dist/cli.js" "\\$@"', '/dist/cli.js" --build-local "\\$@"');
+    .replace(
+      `${scriptIndent}exec "\${NODE_BIN}" "\${WORKSPACE_PATH}/dist/cli.js" "\\$@"`,
+      wrapper,
+    );
 }
 
 // Builds the replacement step that copies session state from the AWF-managed
