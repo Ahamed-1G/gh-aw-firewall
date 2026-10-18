@@ -3,6 +3,7 @@ import { gunzipSync } from 'zlib';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync, spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 
 const root = path.resolve(__dirname, '../..');
 const buildPath = path.join(root, 'guest/cloud-hypervisor/build-test-artifacts.sh');
@@ -59,7 +60,7 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     const cases: [string, string[]][] = [
       ['rm -rf "$BUILD/virtiofsd-target"', ['$virtiofsd_built', '$virtiofsd_src', 'cargo-home']],
       ['sudo rm -rf "$BUILD/linux-${LINUX_VERSION}"', ['$BUILD/linux-${LINUX_VERSION}/', '$linux_tar']],
-      ['sudo rm -rf "$BUILD/enclave-rootfs"', ['--rootfs-tree']],
+      ['sudo rm -rf "$BUILD/enclave-rootfs"', ['--rootfs-tree "$BUILD/enclave-rootfs"']],
       ['sudo rm -rf "$rootfs_tree"\n', ['-d "$rootfs_tree"']],
     ];
     for (const [removal, consumers] of cases) {
@@ -109,8 +110,10 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     for (const role of ['script', 'agent']) {
       expect(dockerfile).toContain(`AS enclave-${role}`);
       expect(guest).toContain(`run-enclave-${role}`);
-      expect(build).toContain(`enclave-${role}-rootfs.sbom.spdx.json`);
+      expect(build).toContain(`run-enclave-${role}`);
     }
+    expect(build).toContain('enclave-rootfs.sbom.spdx.json');
+    expect(build).toContain('rootfs.sbom.spdx.json');
     expect(guest).toContain('FROM ${GUEST_BASE_IMAGE} AS primary');
     expect(guest).toContain('FROM ${GUEST_BASE_IMAGE} AS enclave');
     expect(build).toContain('enclave-rootfs.ext4');
@@ -137,6 +140,47 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     expect(generator).toContain("relationshipType: 'CONTAINS'");
     expect(generator).toContain("relationshipType: 'GENERATED_FROM'");
     expect(generator).toContain("checksums: [{ algorithm: 'SHA256'");
+  });
+
+  it.each([true, false])('binds the primary SBOM to its resolved image (digest-pinned: %s)', (pinned) => {
+    const build = fs.readFileSync(buildPath, 'utf8');
+    const configDigest = 'a'.repeat(64);
+    const manifestDigest = 'b'.repeat(64);
+    const image = 'ghcr.io/github/gh-aw-firewall/cloud-hypervisor-primary';
+    const runtimeImage = pinned ? `${image}@sha256:${manifestDigest}` : `${image}:local`;
+    const selection = build.slice(
+      build.indexOf('primary_image_id=$(docker image inspect'),
+      build.indexOf('guest_dockerfile_sha256='),
+    );
+    const invocation = build.match(
+      /sudo node "\$ROOT\/guest\/cloud-hypervisor\/generate-enclave-rootfs-sbom\.mjs" \\\n  --role primary [\s\S]*?--source-date-epoch "\$SOURCE_DATE_EPOCH"/,
+    );
+    expect(selection).not.toBe('');
+    expect(invocation).not.toBeNull();
+    const args = execFileSync('bash', ['-eu', '-c', [
+      `docker() { printf '%s\\n' 'sha256:${configDigest}'; }`,
+      'sudo() { printf "%s\\n" "$@"; }',
+      selection,
+      invocation![0],
+      'printf "%s\\n" "$primary_image_id"',
+    ].join('\n')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        primary_runtime_image: runtimeImage,
+        PRIMARY_IMAGE: pinned ? `${image}@sha256:${'c'.repeat(64)}` : runtimeImage,
+        ROOT: root,
+        rootfs_tree: 'rootfs',
+        rootfs: 'rootfs.ext4',
+        OUTPUT: '.',
+        RELEASE_TAG: 'v1.2.3',
+        SOURCE_DATE_EPOCH: '1767225600',
+      },
+    }).trim().split('\n');
+    expect(args[args.indexOf('--source-image-digest') + 1])
+      .toBe(pinned ? manifestDigest : configDigest);
+    expect(args[args.length - 1]).toBe(`sha256:${configDigest}`);
+    expect(build).toContain('"imageId": "${primary_image_id}"');
   });
 
   it('requires the agent networking utility in the image, exported tree, and ext4 artifact', () => {
@@ -189,13 +233,16 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     try {
       const tree = path.join(directory, 'rootfs');
       fs.mkdirSync(path.join(tree, 'var/lib/dpkg'), { recursive: true });
-      fs.writeFileSync(path.join(tree, 'var/lib/dpkg/status'), [
+      const packageStatus = [
         'Package: ca-certificates',
         'Status: install ok installed',
         'Architecture: all',
         'Version: 20250419',
         '',
-      ].join('\n'));
+      ].join('\n');
+      fs.writeFileSync(path.join(tree, 'var/lib/dpkg/status'), packageStatus);
+      fs.symlinkSync('var/lib/dpkg/status', path.join(tree, 'status-link'));
+      fs.symlinkSync('missing-target', path.join(tree, 'dangling-link'));
       const rootfs = path.join(directory, 'rootfs.ext4');
       const output = path.join(directory, 'sbom.json');
       const descriptor = fs.openSync(rootfs, 'wx', 0o600);
@@ -211,7 +258,7 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
       const args = [
         '--max-old-space-size=64',
         sbomGeneratorPath,
-        '--role', 'agent',
+        '--role', 'enclave',
         '--rootfs-tree', tree,
         '--rootfs', rootfs,
         '--output', output,
@@ -228,13 +275,42 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
       }).split(/\s/)[0];
       const spdx = JSON.parse(fs.readFileSync(output, 'utf8')) as {
         documentNamespace: string;
-        packages: Array<{ name: string; checksums?: Array<{ algorithm: string; checksumValue: string }> }>;
+        packages: Array<{
+          name: string;
+          filesAnalyzed: boolean;
+          checksums?: Array<{ algorithm: string; checksumValue: string }>;
+          packageVerificationCode?: { packageVerificationCodeValue: string };
+        }>;
+        files: Array<{ SPDXID: string; fileName: string; checksums: Array<{ algorithm: string; checksumValue: string }> }>;
         relationships: Array<{ spdxElementId: string; relationshipType: string; relatedSpdxElement: string }>;
       };
       expect(spdx.packages.map((entry) => entry.name)).toContain('ca-certificates');
       expect(spdx.packages[0].checksums).toEqual([{ algorithm: 'SHA256', checksumValue: digest }]);
+      expect(spdx.packages[0].filesAnalyzed).toBe(true);
+      expect(spdx.packages.slice(1).every((entry) => entry.filesAnalyzed === false)).toBe(true);
+      expect(spdx.packages.slice(1).every((entry) => entry.packageVerificationCode === undefined)).toBe(true);
+      const sha1 = (contents: string) => createHash('sha1').update(contents).digest('hex');
+      const expectedSha1s = [packageStatus, 'var/lib/dpkg/status', 'missing-target'].map(sha1);
+      expect(spdx.packages[0].packageVerificationCode).toEqual({
+        packageVerificationCodeValue: sha1(expectedSha1s.sort().join('')),
+      });
+      expect(spdx.files.find((file) => file.fileName === './status-link')?.checksums).toEqual([
+        {
+          algorithm: 'SHA256',
+          checksumValue: createHash('sha256').update('var/lib/dpkg/status').digest('hex'),
+        },
+        { algorithm: 'SHA1', checksumValue: sha1('var/lib/dpkg/status') },
+      ]);
+      expect(spdx.files.length).toBeGreaterThan(0);
+      for (const file of spdx.files) {
+        expect(spdx.relationships).toContainEqual({
+          spdxElementId: 'SPDXRef-Rootfs',
+          relationshipType: 'CONTAINS',
+          relatedSpdxElement: file.SPDXID,
+        });
+      }
       expect(spdx.documentNamespace).toBe(
-        `https://github.com/github/gh-aw-firewall/cloud-hypervisor/enclave-agent/v1.2.3/${digest}`,
+        `https://github.com/github/gh-aw-firewall/cloud-hypervisor/enclave/v1.2.3/${digest}`,
       );
       expect(spdx.relationships).toContainEqual({
         spdxElementId: 'SPDXRef-Rootfs',
@@ -359,8 +435,9 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
       'subject-path: release/cloud-hypervisor-test-x86_64/enclave-rootfs.ext4',
     );
     expect(release).toContain('release/enclave-rootfs.provenance.sigstore.jsonl');
+    expect(release).toContain('release/enclave-rootfs.sbom.spdx.json');
+    expect(release).toContain('release/cloud-hypervisor-rootfs.sbom.spdx.json');
     for (const role of ['script', 'agent']) {
-      expect(release).toContain(`release/enclave-${role}-rootfs.sbom.spdx.json`);
       expect(release).toContain(
         `ghcr.io/\${{ github.repository }}/enclave-${role}@\${{ steps.build_enclave_${role}.outputs.digest }}`,
       );

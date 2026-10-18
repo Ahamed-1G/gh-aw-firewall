@@ -91,6 +91,7 @@ function dependencies(
       kernelPath: '/snapshot/vmlinux.bin',
       rootfsPath: '/snapshot/rootfs.ext4',
       supervisorPath: '/snapshot/awf-supervisor',
+      ...(sources.rootfsSbomPath ? { rootfsSbomPath: '/snapshot/rootfs.sbom.spdx.json' } : {}),
       ...(sources.manifestPath ? { manifestPath: '/snapshot/manifest.json' } : {}),
       ...(sources.bundlePath
         ? { bundlePath: '/snapshot/manifest.sigstore.jsonl' }
@@ -684,6 +685,75 @@ describe('Cloud Hypervisor preflight (foundation only)', () => {
     expect(removeArtifactSnapshot).toHaveBeenCalledWith(
       `${CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT}/run-test`,
     );
+  });
+
+  describe('primary rootfs inventory', () => {
+    function inventoryDependencies(
+      overrides: Partial<CloudHypervisorPreflightDependencies> = {},
+      rootfsDigest = digest,
+    ): Partial<CloudHypervisorPreflightDependencies> {
+      const input = JSON.parse(manifest());
+      input.artifacts.rootfs.sbom = { file: 'rootfs.sbom.spdx.json', sha256: digest };
+      const inventory = JSON.stringify({
+        spdxVersion: 'SPDX-2.3',
+        packages: [{
+          SPDXID: 'SPDXRef-Rootfs',
+          checksums: [{ algorithm: 'SHA256', checksumValue: rootfsDigest }],
+        }],
+        files: [{ fileName: '/bin/bash' }],
+      });
+      return dependencies({
+        readFile: jest.fn(async file => file.endsWith('.spdx.json') ? inventory : JSON.stringify(input)),
+        ...overrides,
+      });
+    }
+
+    it('stages and verifies the inventory from the immutable snapshot on every use', async () => {
+      const deps = inventoryDependencies();
+      await runCloudHypervisorPreflight(config(), deps);
+      await runCloudHypervisorPreflight(config(), deps);
+      expect(deps.createArtifactSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ rootfsSbomPath: '/opt/rootfs.sbom.spdx.json' }), expect.any(Function),
+      );
+      expect((deps.sha256 as jest.Mock).mock.calls.filter(([file]) =>
+        file === '/snapshot/rootfs.sbom.spdx.json')).toHaveLength(2);
+      expect(deps.readFile).toHaveBeenCalledWith('/snapshot/rootfs.sbom.spdx.json');
+    });
+
+    it.each(['initial use', 'cache reuse'])('rejects a missing inventory on %s', async phase => {
+      const deps = inventoryDependencies();
+      if (phase === 'cache reuse') await runCloudHypervisorPreflight(config(), deps);
+      (deps.access as jest.Mock).mockImplementation(async file => {
+        if (file === '/opt/rootfs.sbom.spdx.json') throw new Error('missing inventory');
+      });
+      await expect(runCloudHypervisorPreflight(config(), deps)).rejects.toThrow('missing inventory');
+    });
+
+    it.each(['initial use', 'cache reuse'])('rejects a tampered inventory on %s', async phase => {
+      const deps = inventoryDependencies();
+      if (phase === 'cache reuse') await runCloudHypervisorPreflight(config(), deps);
+      (deps.sha256 as jest.Mock).mockImplementation(async file =>
+        file.endsWith('.spdx.json') ? 'f'.repeat(64) : digest);
+      await expect(runCloudHypervisorPreflight(config(), deps)).rejects.toThrow(/SBOM.*SHA-256 mismatch/);
+      expect(deps.removeArtifactSnapshot).toHaveBeenCalled();
+    });
+
+    it('rejects an inventory that does not bind the final rootfs digest', async () => {
+      await expect(runCloudHypervisorPreflight(config(), inventoryDependencies({}, 'f'.repeat(64))))
+        .rejects.toThrow(/SBOM does not bind its final filesystem digest/);
+    });
+
+    it('rejects a declared inventory missing before snapshot creation', async () => {
+      const deps = inventoryDependencies();
+      const lstat = deps.lstat!;
+      deps.lstat = async file => {
+        if (file.endsWith('.spdx.json')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return lstat(file);
+      };
+      await expect(runCloudHypervisorPreflight(config(), deps)).rejects.toThrow(/SBOM snapshot is missing/);
+      expect(deps.verifyManifestAttestation).toHaveBeenCalled();
+      expect(deps.removeArtifactSnapshot).toHaveBeenCalled();
+    });
   });
 
   it('requires conspicuous dual opt-in for development-only legacy digests', async () => {

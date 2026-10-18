@@ -561,6 +561,7 @@ export async function runCloudHypervisorPreflight(
     constants.R_OK,
     dependencies,
   ));
+  let rootfsSbomPath: string | undefined;
   if (!developmentBypass) {
     await report.check('manifest-trust', () => assertTrustedRegularFile(
       'Cloud Hypervisor artifact manifest',
@@ -574,7 +575,19 @@ export async function runCloudHypervisorPreflight(
       constants.R_OK,
       dependencies,
     ));
+    const candidate = path.join(path.dirname(config.rootfsPath!), 'rootfs.sbom.spdx.json');
+    rootfsSbomPath = await report.check('sbom-trust', async () => {
+      try {
+        await dependencies.lstat(candidate);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+      await assertTrustedRegularFile('Cloud Hypervisor rootfs SBOM', candidate, constants.R_OK, dependencies);
+      return candidate;
+    });
   }
+  if (!rootfsSbomPath) report.notRequired('sbom-trust');
 
   const snapshot = await report.check('artifact-snapshot', () => dependencies.createArtifactSnapshot(
     {
@@ -583,6 +596,7 @@ export async function runCloudHypervisorPreflight(
       kernelPath: config.kernelPath!,
       rootfsPath: config.rootfsPath!,
       supervisorPath: config.supervisorPath!,
+      ...(rootfsSbomPath ? { rootfsSbomPath } : {}),
       ...(!developmentBypass
         ? {
           manifestPath: config.artifactManifestPath!,
@@ -624,6 +638,36 @@ export async function runCloudHypervisorPreflight(
         return parsed;
       });
       artifactDigests = artifactDigestsFromManifest(manifest);
+      if (manifest.artifacts.rootfs.sbom) {
+        if (!snapshot.rootfsSbomPath) throw new Error('Cloud Hypervisor rootfs SBOM snapshot is missing');
+        await report.check('sbom-digest', () => assertDigest(
+          'Cloud Hypervisor rootfs SBOM', snapshot.rootfsSbomPath!,
+          manifest.artifacts.rootfs.sbom!.sha256, dependencies,
+        ));
+        await report.check('sbom-contents', async () => {
+          const document: unknown = JSON.parse(await dependencies.readFile(snapshot.rootfsSbomPath!));
+          const sbom = document as {
+            spdxVersion?: unknown;
+            packages?: Array<{ SPDXID?: string; checksums?: Array<{ algorithm?: string; checksumValue?: string }> }>;
+            files?: unknown[];
+          } | null;
+          if (sbom?.spdxVersion !== 'SPDX-2.3'
+            || !Array.isArray(sbom.files) || sbom.files.length === 0
+            || !Array.isArray(sbom.packages)
+            || sbom.packages.filter(pkg => pkg?.SPDXID === 'SPDXRef-Rootfs'
+              && Array.isArray(pkg.checksums) && pkg.checksums.some(check => check?.algorithm === 'SHA256'
+                && check.checksumValue === artifactDigests.rootfs)).length !== 1) {
+            throw new Error('Cloud Hypervisor rootfs SBOM does not bind its final filesystem digest');
+          }
+        });
+      } else {
+        report.notRequired('sbom-digest');
+        report.notRequired('sbom-contents');
+      }
+    }
+    if (developmentBypass) {
+      report.notRequired('sbom-digest');
+      report.notRequired('sbom-contents');
     }
     await report.check('cloud-hypervisor-digest', () => assertDigest(
       'Cloud Hypervisor binary',
