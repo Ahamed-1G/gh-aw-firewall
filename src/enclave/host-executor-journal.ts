@@ -30,6 +30,8 @@ import {
 } from '../cloud-hypervisor/host-preflight-progress';
 import type { EnclaveStartupChecklist } from './startup-progress';
 import { logger } from '../logger';
+import type { GuestExecutionDiagnostics } from '../microvm/execution-diagnostics';
+import type { EnclaveSessionDiagnostics } from '../cloud-hypervisor/enclave-session-diagnostics';
 
 export const HOST_EXECUTOR_DEFAULT_JOURNAL_DIRECTORY =
   '/var/lib/awf-cloud-hypervisor/host-executor-journal';
@@ -254,6 +256,9 @@ export class HostExecutorInvocationDiagnostics {
     }>;
     failure?: { stage: string; reason: string; code: string; errorType: string; sequence: number };
     cleanupFailure?: { stage: string; reason: string; code: string; errorType: string; sequence: number };
+    guestExecution?: GuestExecutionDiagnostics;
+    guestSession?: EnclaveSessionDiagnostics;
+    developmentSupervisor?: { provenance: 'unattested-development'; sha256: string };
   };
 
   constructor(run: HostExecutorRunState, plan: HostExecutorInvocationPlan) {
@@ -281,6 +286,22 @@ export class HostExecutorInvocationDiagnostics {
       phase, elapsedMs: Math.max(0, Math.round(performance.now() - this.started)),
       ...(outcome === undefined ? {} : { outcome }),
     });
+    this.commit();
+  }
+
+  guestExecution = (value: GuestExecutionDiagnostics): void => {
+    this.snapshot.guestExecution = { ...value };
+    this.commit();
+  };
+
+  developmentSupervisor(sha256: string): void {
+    if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Invalid development supervisor digest');
+    this.snapshot.developmentSupervisor = { provenance: 'unattested-development', sha256 };
+    this.commit();
+  }
+
+  guestSession(value: EnclaveSessionDiagnostics): void {
+    this.snapshot.guestSession = value;
     this.commit();
   }
 
