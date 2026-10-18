@@ -9,7 +9,20 @@ import { requireObject } from '../json-validation';
 export type CloudHypervisorEnclaveRole = 'script' | 'agent';
 export const CLOUD_HYPERVISOR_ENCLAVE_KERNEL_VERSION = '6.1.141';
 
-const ROLE_METADATA = {
+const SHARED_ROLE_METADATA = {
+  script: {
+    file: 'enclave-rootfs.ext4',
+    entrypoint: '/usr/local/bin/run-enclave-script',
+    sbomFile: 'enclave-script-rootfs.sbom.spdx.json',
+  },
+  agent: {
+    file: 'enclave-rootfs.ext4',
+    entrypoint: '/usr/local/bin/run-enclave-agent',
+    sbomFile: 'enclave-agent-rootfs.sbom.spdx.json',
+  },
+} as const;
+
+const LEGACY_ROLE_METADATA = {
   script: {
     file: 'enclave-script-rootfs.ext4',
     entrypoint: '/usr/local/bin/run-enclave-script',
@@ -54,6 +67,10 @@ export interface CloudHypervisorEnclaveArtifactManifest {
     readonly kernelVersion: string;
     readonly supervisorVersion: string;
   };
+  readonly guestBase?: {
+    readonly image: string;
+    readonly imageId: string;
+  };
   readonly rootfs: Readonly<Record<
     CloudHypervisorEnclaveRole,
     CloudHypervisorEnclaveRootfsArtifact
@@ -91,6 +108,7 @@ function parseRole(
   value: unknown,
   role: CloudHypervisorEnclaveRole,
   expectedReleaseTag: string,
+  sharedLayout: boolean,
 ): CloudHypervisorEnclaveRootfsArtifact {
   const label = `manifest.rootfs.${role}`;
   const artifact = requireObject(value, label);
@@ -107,7 +125,7 @@ function parseRole(
     'uid',
     'version',
   ], label);
-  const metadata = ROLE_METADATA[role];
+  const metadata = (sharedLayout ? SHARED_ROLE_METADATA : LEGACY_ROLE_METADATA)[role];
   if (artifact.role !== role) throw new Error(`${label}.role must be ${role}`);
   if (artifact.file !== metadata.file) {
     throw new Error(`${label}.file must be ${metadata.file}`);
@@ -135,7 +153,7 @@ function parseRole(
   }
   const sourceImage = requireString(artifact.sourceImage, `${label}.sourceImage`);
   const expectedImage = new RegExp(
-    `^ghcr\\.io/github/gh-aw-firewall/enclave-${role}@sha256:[a-f0-9]{64}$`,
+    `^ghcr\\.io/github/gh-aw-firewall/${sharedLayout ? 'cloud-hypervisor-enclave' : `enclave-${role}`}@sha256:[a-f0-9]{64}$`,
   );
   if (!expectedImage.test(sourceImage)) {
     throw new Error(`${label}.sourceImage must be the release-pinned ${role} enclave image`);
@@ -184,6 +202,7 @@ export function parseCloudHypervisorEnclaveArtifactManifest(
     );
   }
   const manifest = requireObject(parsed, 'Cloud Hypervisor enclave artifact manifest');
+  const sharedLayout = Object.prototype.hasOwnProperty.call(manifest, 'guestBase');
   requireClosedKeys(manifest, [
     'architecture',
     'artifactType',
@@ -191,6 +210,7 @@ export function parseCloudHypervisorEnclaveArtifactManifest(
     'release',
     'rootfs',
     'schemaVersion',
+    ...(sharedLayout ? ['guestBase'] : []),
   ], 'Cloud Hypervisor enclave artifact manifest');
   if (manifest.schemaVersion !== 1) {
     throw new Error('Cloud Hypervisor enclave artifact manifest schemaVersion must be 1');
@@ -257,6 +277,29 @@ export function parseCloudHypervisorEnclaveArtifactManifest(
 
   const rootfs = requireObject(manifest.rootfs, 'manifest.rootfs');
   requireClosedKeys(rootfs, ['agent', 'script'], 'manifest.rootfs');
+  let guestBase: CloudHypervisorEnclaveArtifactManifest['guestBase'];
+  if (sharedLayout) {
+    const guestBaseValue = requireObject(manifest.guestBase, 'manifest.guestBase');
+    requireClosedKeys(guestBaseValue, ['image', 'imageId'], 'manifest.guestBase');
+    const baseImage = requireString(guestBaseValue.image, 'manifest.guestBase.image');
+    if (!/^ghcr\.io\/github\/gh-aw-firewall\/cloud-hypervisor-guest-base@sha256:[a-f0-9]{64}$/.test(baseImage)) {
+      throw new Error('manifest.guestBase.image must be release-pinned');
+    }
+    const baseImageId = requireString(guestBaseValue.imageId, 'manifest.guestBase.imageId');
+    if (!/^sha256:[a-f0-9]{64}$/.test(baseImageId)) {
+      throw new Error('manifest.guestBase.imageId must be a SHA-256 image ID');
+    }
+    guestBase = { image: baseImage, imageId: baseImageId };
+  }
+  const script = parseRole(rootfs.script, 'script', expectedReleaseTag, sharedLayout);
+  const agent = parseRole(rootfs.agent, 'agent', expectedReleaseTag, sharedLayout);
+  if (sharedLayout && (
+    script.sha256 !== agent.sha256 || script.sizeBytes !== agent.sizeBytes
+    || script.sourceImage !== agent.sourceImage
+    || script.sourceImageDigest !== agent.sourceImageDigest
+  )) {
+    throw new Error('script and agent must reference the same enclave guest image and rootfs');
+  }
   return {
     schemaVersion: 1,
     artifactType: 'awf-cloud-hypervisor-enclave-rootfs-set',
@@ -272,9 +315,10 @@ export function parseCloudHypervisorEnclaveArtifactManifest(
       kernelVersion: CLOUD_HYPERVISOR_ENCLAVE_KERNEL_VERSION,
       supervisorVersion: expectedReleaseTag,
     },
+    ...(guestBase ? { guestBase } : {}),
     rootfs: {
-      script: parseRole(rootfs.script, 'script', expectedReleaseTag),
-      agent: parseRole(rootfs.agent, 'agent', expectedReleaseTag),
+      script,
+      agent,
     },
   };
 }

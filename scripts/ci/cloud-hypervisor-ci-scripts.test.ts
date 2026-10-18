@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { execFileSync } from 'child_process';
+import { runInNewContext } from 'vm';
 
 const preflightPath = path.resolve(__dirname, 'cloud-hypervisor-host-preflight.sh');
 const smokePath = path.resolve(__dirname, 'cloud-hypervisor-live-smoke.sh');
@@ -126,6 +128,14 @@ describe('cloud-hypervisor-host-preflight.sh', () => {
     expect(source).toContain('sha256sum --check --strict SHA256SUMS');
   });
 
+  it('preflights one shared enclave rootfs while checking both role metadata entries', () => {
+    const source = fs.readFileSync(preflightPath, 'utf-8');
+    expect(source).toContain('rootfs_name=enclave-rootfs.ext4');
+    expect(source).toContain('for role in script agent; do');
+    expect(source).toContain('.rootfs.${role}.role');
+    expect(source).toContain('.rootfs.${role}.file');
+  });
+
   (shellcheckAvailable() ? it : it.skip)('has no shellcheck errors', () => {
     expect(() =>
       execFileSync('shellcheck', ['--severity=error', preflightPath]),
@@ -134,8 +144,169 @@ describe('cloud-hypervisor-host-preflight.sh', () => {
 });
 
 describe('cloud-hypervisor-live-smoke.sh', () => {
+  it('creates private work directories even with a permissive runner umask', () => {
+    const source = fs.readFileSync(smokePath, 'utf-8');
+    const headerEnd = source.indexOf('\nARTIFACT_DIR=');
+    expect(headerEnd).toBeGreaterThan(0);
+    const header = source.slice(0, headerEnd);
+    const runCase = source.match(/^run_case\(\) \{[\s\S]*?^\}/m)?.[0];
+    expect(runCase).toBeDefined();
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-smoke-permissions-'));
+    try {
+      execFileSync('bash', ['-c', [
+        'umask 022',
+        header,
+        'RUN_ROOT="$1"',
+        'ROOT=fixture',
+        'SECRET_SENTINEL=fixture-sentinel',
+        'COMMON=()',
+        'sudo() { test "$1" = -E && test "$2" = node; }',
+        'assert_no_residue() { :; }',
+        runCase!,
+        'run_case fixture 0 true',
+      ].join('\n'), 'awf-smoke-permissions', scratch], { stdio: 'pipe' });
+      expect(fs.statSync(path.join(scratch, 'fixture/work')).mode & 0o777).toBe(0o700);
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('passes bash syntax check', () => {
     expect(() => execFileSync('bash', ['-n', smokePath])).not.toThrow();
+  });
+
+  describe('keep-mode trusted-artifact teardown', () => {
+    const snapshotRoot = '/var/lib/awf-cloud-hypervisor/trusted-artifacts';
+    const directory = `${snapshotRoot}/run-Ab1234`;
+    const source = fs.readFileSync(smokePath, 'utf-8');
+    const cleanup = source.match(
+      /<<'KEEP_SNAPSHOT_CLEANUP'\n([\s\S]*?)\nKEEP_SNAPSHOT_CLEANUP/,
+    )?.[1];
+
+    async function runCleanup(options: {
+      executable?: unknown;
+      realpath?: string;
+      uid?: number;
+      isDirectory?: boolean;
+      mountError?: Error;
+      identityError?: Error;
+    } = {}) {
+      expect(cleanup).toBeDefined();
+      const identity = { device: '1', inode: '2' };
+      const dependencies = { lstat: jest.fn() };
+      const captureFileIdentity = jest.fn().mockResolvedValue(identity);
+      const assertNoMountsUnder = options.mountError
+        ? jest.fn().mockRejectedValue(options.mountError)
+        : jest.fn().mockResolvedValue(undefined);
+      const removeExactDirectory = options.identityError
+        ? jest.fn().mockRejectedValue(options.identityError)
+        : jest.fn().mockResolvedValue(undefined);
+      const modules: Record<string, unknown> = {
+        fs: { promises: {
+          readFile: jest.fn().mockResolvedValue(JSON.stringify({ process: {
+            executable: options.executable ?? `${directory}/cloud-hypervisor`,
+          } })),
+          realpath: jest.fn().mockResolvedValue(options.realpath ?? directory),
+          lstat: jest.fn().mockResolvedValue({
+            uid: options.uid ?? 0,
+            isDirectory: () => options.isDirectory ?? true,
+          }),
+        } },
+        path,
+        '/fixture/dist/cloud-hypervisor/manager-types': {
+          CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT: snapshotRoot,
+        },
+        '/fixture/dist/cloud-hypervisor/cleanup-dependencies': {
+          resolveCleanupDependencies: () => dependencies,
+        },
+        '/fixture/dist/cloud-hypervisor/cleanup-process': { captureFileIdentity },
+        '/fixture/dist/cloud-hypervisor/cleanup-record-store': {
+          assertNoMountsUnder, removeExactDirectory,
+        },
+      };
+      const testProcess = {
+        argv: ['node', '-', '/fixture', '/fixture/confinement.json'],
+        exitCode: 0,
+      };
+      const error = jest.fn();
+      await runInNewContext(cleanup!, {
+        require: (name: string) => {
+          if (!(name in modules)) throw new Error(`Unexpected module: ${name}`);
+          return modules[name];
+        },
+        process: testProcess,
+        console: { error },
+      });
+      return {
+        identity, dependencies, captureFileIdentity, assertNoMountsUnder,
+        removeExactDirectory, testProcess, error,
+      };
+    }
+
+    it('removes only the kept VM snapshot through identity and mount guards', async () => {
+      const result = await runCleanup();
+      expect(result.testProcess.exitCode).toBe(0);
+      expect(result.error).not.toHaveBeenCalled();
+      expect(result.captureFileIdentity).toHaveBeenCalledWith(result.dependencies.lstat, directory);
+      expect(result.assertNoMountsUnder).toHaveBeenCalledWith(result.dependencies, directory);
+      expect(result.removeExactDirectory).toHaveBeenCalledWith(
+        directory, result.identity, result.dependencies, true,
+      );
+      expect(result.assertNoMountsUnder.mock.invocationCallOrder[0])
+        .toBeLessThan(result.removeExactDirectory.mock.invocationCallOrder[0]);
+      const keepCase = source.slice(source.indexOf('keep_work='), source.indexOf(
+        '# --- Cloud Hypervisor-specific live security assertions',
+      ));
+      expect(keepCase.indexOf("<<'KEEP_SNAPSHOT_CLEANUP'"))
+        .toBeLessThan(keepCase.lastIndexOf('\nassert_no_residue'));
+    });
+
+    it.each([
+      { executable: `${snapshotRoot}/cloud-hypervisor` },
+      { executable: `${snapshotRoot}/../run-Ab1234/cloud-hypervisor` },
+      { executable: `${directory}/other-binary` },
+      { executable: 42 },
+      { realpath: `${snapshotRoot}/run-Other1` },
+      { uid: 1000 },
+      { isDirectory: false },
+      { mountError: new Error('mount remains') },
+    ])('rejects unsafe snapshot removal: %j', async (options) => {
+      const result = await runCleanup(options);
+      expect(result.testProcess.exitCode).toBe(1);
+      expect(result.error).toHaveBeenCalledTimes(1);
+      expect(result.removeExactDirectory).not.toHaveBeenCalled();
+    });
+
+    it('surfaces identity-checked removal failures', async () => {
+      const failure = new Error('snapshot identity changed');
+      const result = await runCleanup({ identityError: failure });
+      expect(result.testProcess.exitCode).toBe(1);
+      expect(result.error).toHaveBeenCalledWith(failure);
+    });
+  });
+
+  describe('enclave network packet fixture', () => {
+    const source = fs.readFileSync(path.resolve(
+      __dirname, '../../src/cloud-hypervisor/enclave-network.integration.test.ts',
+    ), 'utf-8');
+
+    it('enables loopback in every namespace before probing the peer locally', () => {
+      expect(source).toMatch(
+        /for \(const namespace of \[plan\.namespaceName, guestNs, peerNs\]\) \{\s*await inNs\(namespace, 'ip', \['link', 'set', 'lo', 'up'\]\);/,
+      );
+      expect(source.indexOf("['link', 'set', 'lo', 'up']"))
+        .toBeLessThan(source.indexOf('const probe ='));
+    });
+
+    it('bounds peer readiness retries below the setup hook timeout', () => {
+      const readiness = source.slice(source.indexOf('let ready = false'), source.indexOf('if (!ready) throw'));
+      const attempts = Number(readiness.match(/attempt < (\d+)/)?.[1]);
+      const requestSeconds = Number(readiness.match(/'--max-time', '([\d.]+)'/)?.[1]);
+      const hookTimeout = Number(source.match(/\}, ([\d_]+)\);/)?.[1].replace(/_/g, ''));
+      expect(attempts).toBeGreaterThan(0);
+      expect(requestSeconds).toBeGreaterThan(0);
+      expect((requestSeconds * 1000 + 100) * attempts).toBeLessThan(hookTimeout);
+    });
   });
 
   it('covers the shared behavioral/security contract plus virtio-fs semantics', () => {
