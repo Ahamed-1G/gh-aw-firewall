@@ -66,6 +66,10 @@ import {
 } from '../enclave/github-gateway';
 import type { WrapperConfig } from '../types';
 import {
+  prepareProtectedCommandOutputCapture,
+  type ProtectedCommandOutputCapture,
+} from '../protected-command-output-capture';
+import {
   formatCloudHypervisorDockerFallbackWarning,
   isCloudHypervisorUnsupportedHostError,
 } from '../cloud-hypervisor/errors';
@@ -557,6 +561,7 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
   let agentCommandStarted = false;
   let hostIptablesSetup = false;
   let externalRuntimeBackend: ExternalAgentRuntimeBackend | undefined;
+  let commandOutputCapture: ProtectedCommandOutputCapture | undefined;
   let cloudHypervisorPrimaryPreflightPassed = false;
   let performCleanup = buildCleanupFn(
     config,
@@ -603,6 +608,13 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
       await runDindBootstrap(config);
     }
     assertPersistentDebugArtifactsIsolated(config);
+    commandOutputCapture = prepareProtectedCommandOutputCapture(config);
+    if (commandOutputCapture) {
+      config.additionalEnv = {
+        ...config.additionalEnv,
+        AWF_CAPTURE_COMMAND_OUTPUT: '1',
+      };
+    }
 
     // Log config with redacted secrets - remove API keys entirely
     // to prevent sensitive data from flowing to logger (CodeQL sensitive data logging)
@@ -628,12 +640,37 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
     registerSignalHandlers({
       getContainersStarted: () => containersStarted,
       keepContainers: config.keepContainers,
-      fastKillAgentContainer: () => (
-        externalRuntimeBackend
-          ? externalRuntimeBackend.stop()
-          : fastKillAgentContainer()
-      ),
-      performCleanup: (signal) => performCleanup(signal),
+      fastKillAgentContainer: async () => {
+        if (externalRuntimeBackend) {
+          await externalRuntimeBackend.stop();
+        } else {
+          await fastKillAgentContainer();
+        }
+        if (commandOutputCapture) {
+          if (agentCommandStarted) {
+            await commandOutputCapture.waitForCommandCompletion();
+          } else {
+            commandOutputCapture.finishCommand(undefined, 'cancelled');
+          }
+        }
+      },
+      performCleanup: async (signal) => {
+        try {
+          await performCleanup(signal);
+          commandOutputCapture?.setTeardown('complete');
+        } catch (error) {
+          commandOutputCapture?.setTeardown('failed');
+          throw error;
+        } finally {
+          if (signal) {
+            commandOutputCapture?.finishCommand(
+              undefined,
+              config.keepContainers && agentCommandStarted ? 'interrupted' : 'cancelled',
+            );
+          }
+          commandOutputCapture?.close();
+        }
+      },
       cleanupRouting: () => cleanupRoutingState(config),
     });
 
@@ -676,16 +713,32 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
       ? adaptExternalRuntimeBackend(externalRuntimeBackend)
       : undefined;
     const workflowRunAgentCommand = externalWorkflowDependencies?.runAgentCommand
-      ?? ((workDir: string, allowedDomains: string[], proxyLogsDir?: string, agentTimeoutMinutes?: number) =>
-        runAgentCommand(workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes, config.containerRuntime));
+      ?? ((
+        workDir: string,
+        allowedDomains: string[],
+        proxyLogsDir?: string,
+        agentTimeoutMinutes?: number,
+        capture?: ProtectedCommandOutputCapture,
+      ) => capture
+        ? runAgentCommand(
+          workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes, config.containerRuntime, capture,
+        )
+        : runAgentCommand(
+          workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes, config.containerRuntime,
+        ));
     const trackedRunAgentCommand = async (
       workDir: string,
       allowedDomains: string[],
       proxyLogsDir?: string,
       agentTimeoutMinutes?: number,
+      capture?: ProtectedCommandOutputCapture,
     ) => {
       agentCommandStarted = true;
-      const result = await workflowRunAgentCommand(workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes);
+      const result = capture
+        ? await workflowRunAgentCommand(
+          workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes, capture,
+        )
+        : await workflowRunAgentCommand(workDir, allowedDomains, proxyLogsDir, agentTimeoutMinutes);
       if (result.exitCode !== 0) {
         emitStartupExitMarker(config, startupExitState, {
           path: 'workflow-return', exitCode: result.exitCode, containersStarted,
@@ -759,7 +812,16 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
       },
       {
         logger,
-        performCleanup,
+        performCleanup: async () => {
+          try {
+            await performCleanup();
+            commandOutputCapture?.setTeardown('complete');
+          } catch (error) {
+            commandOutputCapture?.setTeardown('failed');
+            throw error;
+          }
+        },
+        commandOutputCapture,
         onHostIptablesSetup: () => {
           hostIptablesSetup = true;
         },
@@ -775,6 +837,7 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
         recordWrite: 'not-attempted', cleanup: 'completed',
       });
     }
+    commandOutputCapture?.close();
     console.error(`Process exiting with code: ${exitCode}`);
     process.exit(exitCode);
     return;
@@ -797,6 +860,14 @@ export function createMainAction(getOptionValueSource: OptionSourceResolver) {
     } catch (cleanupError) {
       cleanupOutcome = 'failed';
       logger.warn('Cleanup after a fatal error failed.', cleanupError);
+    }
+    if (commandOutputCapture) {
+      commandOutputCapture.finishCommand(
+        undefined,
+        'failed',
+      );
+      commandOutputCapture.setTeardown(cleanupOutcome === 'completed' ? 'complete' : 'failed');
+      commandOutputCapture.close();
     }
     emitStartupExitMarker(config, startupExitState, { ...exitMarker, cleanup: cleanupOutcome });
     cleanupRoutingState(config);
