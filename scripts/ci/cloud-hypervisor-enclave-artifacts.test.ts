@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 
 const root = path.resolve(__dirname, '../..');
 const buildPath = path.join(root, 'guest/cloud-hypervisor/build-test-artifacts.sh');
@@ -32,6 +32,59 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('deletes each guest build intermediate only after its last consumer', () => {
+    const lines = fs.readFileSync(buildPath, 'utf8').split('\n');
+    const index = (pattern: string, from = 0) => {
+      const found = lines.findIndex((line, i) => i >= from && line.includes(pattern));
+      expect(found).toBeGreaterThanOrEqual(0);
+      return found;
+    };
+    const lastUse = (pattern: string, before: number) =>
+      lines.slice(0, before).map((line, i) => (line.includes(pattern) ? i : -1))
+        .reduce((a, b) => Math.max(a, b), -1);
+    const packaging = index('--file "$OUTPUT/awf-cloud-hypervisor-test-x86_64.tar.gz"');
+    const cases: [string, string[]][] = [
+      ['rm -rf "$BUILD/virtiofsd-target"', ['$virtiofsd_built', '$virtiofsd_src', 'cargo-home']],
+      ['sudo rm -rf "$BUILD/linux-${LINUX_VERSION}"', ['$BUILD/linux-${LINUX_VERSION}/', '$linux_tar']],
+      ['sudo rm -rf "$BUILD/enclave-script-rootfs"', ['--rootfs-tree']],
+      ['sudo rm -rf "$rootfs_tree"\n', ['-d "$rootfs_tree"']],
+    ];
+    for (const [removal, consumers] of cases) {
+      const at = removal.endsWith('\n')
+        ? lines.findIndex((line) => line === removal.trim())
+        : index(removal);
+      expect(at).toBeGreaterThan(0);
+      expect(at).toBeLessThan(packaging);
+      for (const consumer of consumers) {
+        expect(lastUse(consumer, at)).toBeGreaterThanOrEqual(0);
+        expect(lines.slice(at + 1).some((line) => line.includes(consumer))).toBe(false);
+      }
+      expect(lines[at + 1]).toMatch(/^report_disk /);
+    }
+    // Outputs and archive encoding are unchanged; only intermediates are removed.
+    const build = lines.join('\n');
+    expect(lines.slice(index('report_disk setup')).join('\n')).not.toMatch(/rm [^\n]*\$OUTPUT/);
+    expect(build).not.toContain('--sparse');
+    expect(build).not.toMatch(/docker (image|system) prune|docker rmi/);
+    const prune = index('docker builder prune --all --force');
+    expect(lines[prune - 2]).toContain('AWF_CH_PRUNE_DOCKER_BUILD_CACHE:-0}" = 1');
+    expect(prune).toBeGreaterThan(index('resolve_enclave_image "$ENCLAVE_AGENT_IMAGE"'));
+  });
+
+  it.each([
+    ['test-cloud-hypervisor.yml', 'Build and verify pinned artifacts'],
+    ['release.yml', 'Build and verify pinned test artifacts'],
+  ])('reclaims hosted-runner disk before building guest artifacts in %s', (file, name) => {
+    const workflow = fs.readFileSync(path.join(root, '.github/workflows', file), 'utf8');
+    const build = workflow.indexOf(`- name: ${name}`);
+    const free = workflow.lastIndexOf('- name: Free unused hosted-runner disk space', build);
+    expect(free).toBeGreaterThan(0);
+    expect(workflow.slice(free, build)).not.toContain('hostedtoolcache/go');
+    const step = workflow.slice(build, workflow.indexOf('- name:', build + 1));
+    expect(step).toContain('AWF_CH_PRUNE_DOCKER_BUILD_CACHE=1');
+    expect(step).toContain('./guest/cloud-hypervisor/verify-test-artifacts.sh');
   });
 
   it.each([buildPath, verifyPath, setupPath])('%s passes bash syntax validation', (file) => {
@@ -67,7 +120,52 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
     expect(generator).toContain("checksums: [{ algorithm: 'SHA256'");
   });
 
-  it('emits installed packages and the rootfs checksum in generated SPDX', () => {
+  it('requires the agent networking utility in the image, exported tree, and ext4 artifact', () => {
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    const agent = dockerfile.split(' AS enclave-agent\n')[1].split(' AS enclave-mcp-server')[0];
+    expect(dockerfile).toContain('FROM ${BUILD_TOOLS_IMAGE} AS enclave-agent');
+    const base = fs.readFileSync(path.join(root, 'containers/build-tools/Dockerfile'), 'utf8');
+    expect(base).toContain('dnsutils iproute2 net-tools netcat-openbsd');
+    expect(base).toContain('build-essential gcc g++ make cmake');
+    expect(agent).toContain('/usr/bin/ip -Version');
+    const build = fs.readFileSync(buildPath, 'utf8');
+    expect(build).toContain('sudo chroot "$tree" /usr/bin/ip -Version');
+    const verify = fs.readFileSync(verifyPath, 'utf8');
+    expect(verify).toContain('if [ "$role" = agent ]; then');
+    expect(verify).toContain("debugfs -R 'stat /usr/bin/ip'");
+    expect(verify).toContain("grep -E 'Mode:[[:space:]]+0[1357][0-7][0-7]'");
+    const runtime = fs.readFileSync(
+      path.join(root, 'guest/microvm-supervisor/runtime_linux.go'), 'utf8',
+    );
+    expect(runtime).toContain('"/usr/bin/ip"');
+  });
+
+  it('uses the same-release immutable primary toolchain base and explicitly supplies local bases', () => {
+    const release = fs.readFileSync(releaseWorkflowPath, 'utf8');
+    expect(release).toContain('needs: [bump-version, build-build-tools]');
+    expect(release).toContain(
+      'BUILD_TOOLS_IMAGE=ghcr.io/${{ github.repository }}/build-tools@${{ needs.build-build-tools.outputs.digest }}',
+    );
+    const build = fs.readFileSync(buildPath, 'utf8');
+    expect(build).toContain('--build-arg "BUILD_TOOLS_IMAGE=$BUILD_TOOLS_IMAGE"');
+    expect(build).toContain('sudo chroot "$tree" /usr/bin/ip -Version');
+    expect(release).toContain(
+      'ENCLAVE_AGENT_IMAGE="ghcr.io/${{ github.repository }}/enclave-agent@${{ needs.build-enclaves.outputs.enclave_agent_digest }}"',
+    );
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    expect(dockerfile).not.toContain('&& ! command -v gh');
+    expect(dockerfile).toContain('gcc --version && make --version && cmake --version && gh --version');
+  });
+
+  it('builds the PR scan toolchain first and does not use a stale base after failure', () => {
+    const scan = fs.readFileSync(path.join(root, '.github/workflows/supply-chain-scan.yml'), 'utf8');
+    expect(scan.indexOf("('build-tools',")).toBeLessThan(scan.indexOf("('enclave-agent',"));
+    expect(scan).toContain('BUILD_TOOLS_IMAGE=awf-pr-scan-build-tools:pr');
+    expect(scan).toContain("if name == 'enclave-agent' and not build_tools_ready:");
+    expect(scan).toMatch(/if name == 'build-tools':\n\s+build_tools_ready = True/);
+  });
+
+  it.each([13, 2294165504])('emits identical SPDX bindings for a %i-byte rootfs with bounded hashing', (size) => {
     const directory = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'awf-sbom-'));
     try {
       const tree = path.join(directory, 'rootfs');
@@ -81,8 +179,18 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
       ].join('\n'));
       const rootfs = path.join(directory, 'rootfs.ext4');
       const output = path.join(directory, 'sbom.json');
-      fs.writeFileSync(rootfs, 'rootfs fixture');
-      execFileSync(process.execPath, [
+      const descriptor = fs.openSync(rootfs, 'wx', 0o600);
+      try {
+        fs.ftruncateSync(descriptor, size);
+        fs.writeSync(descriptor, Buffer.from('rootfs fixture'), 0, 13, 0);
+        if (size > 13) {
+          fs.writeSync(descriptor, Buffer.from('end'), 0, 3, size - 3);
+        }
+      } finally {
+        fs.closeSync(descriptor);
+      }
+      const args = [
+        '--max-old-space-size=64',
         sbomGeneratorPath,
         '--role', 'agent',
         '--rootfs-tree', tree,
@@ -92,16 +200,43 @@ describe('Cloud Hypervisor enclave rootfs artifacts', () => {
         '--source-image', 'ghcr.io/github/gh-aw-firewall/enclave-agent@sha256:fixture',
         '--source-image-digest', 'a'.repeat(64),
         '--source-date-epoch', '1767225600',
-      ]);
+      ];
+      execFileSync(process.execPath, args, { timeout: 120_000 });
+      const checksumCommand = process.platform === 'darwin' ? 'shasum' : 'sha256sum';
+      const checksumArgs = process.platform === 'darwin' ? ['-a', '256', rootfs] : [rootfs];
+      const digest = execFileSync(checksumCommand, checksumArgs, {
+        encoding: 'utf8', timeout: 120_000,
+      }).split(/\s/)[0];
       const spdx = JSON.parse(fs.readFileSync(output, 'utf8')) as {
-        packages: Array<{ name: string; checksums?: Array<{ checksumValue: string }> }>;
+        documentNamespace: string;
+        packages: Array<{ name: string; checksums?: Array<{ algorithm: string; checksumValue: string }> }>;
+        relationships: Array<{ spdxElementId: string; relationshipType: string; relatedSpdxElement: string }>;
       };
       expect(spdx.packages.map((entry) => entry.name)).toContain('ca-certificates');
-      expect(spdx.packages[0].checksums?.[0].checksumValue).toMatch(/^[a-f0-9]{64}$/);
+      expect(spdx.packages[0].checksums).toEqual([{ algorithm: 'SHA256', checksumValue: digest }]);
+      expect(spdx.documentNamespace).toBe(
+        `https://github.com/github/gh-aw-firewall/cloud-hypervisor/enclave-agent/v1.2.3/${digest}`,
+      );
+      expect(spdx.relationships).toContainEqual({
+        spdxElementId: 'SPDXRef-Rootfs',
+        relationshipType: 'GENERATED_FROM',
+        relatedSpdxElement: 'SPDXRef-SourceImage',
+      });
+      fs.unlinkSync(rootfs);
+      fs.unlinkSync(output);
+      const missing = spawnSync(process.execPath, args, { encoding: 'utf8' });
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain('ENOENT');
+      expect(fs.existsSync(output)).toBe(false);
+      fs.mkdirSync(rootfs);
+      const directoryInput = spawnSync(process.execPath, args, { encoding: 'utf8' });
+      expect(directoryInput.status).not.toBe(0);
+      expect(directoryInput.stderr).toContain('EISDIR');
+      expect(fs.existsSync(output)).toBe(false);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 120_000);
 
   it('hardens both role trees before creating immutable ext4 images', () => {
     const build = fs.readFileSync(buildPath, 'utf8');

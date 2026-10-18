@@ -26,6 +26,124 @@ function jobs(file: string): Record<string, { steps: Step[] }> {
 }
 
 describe('CI registry retrieval', () => {
+  it('uses the reviewed patched gh build and removes the unused inherited service manager', () => {
+    const buildTools = fs.readFileSync(path.join(root, 'containers/build-tools/Dockerfile'), 'utf8');
+    const agent = fs.readFileSync(path.join(root, 'containers/agent/Dockerfile'), 'utf8');
+    const ghStage = (dockerfile: string) => dockerfile.slice(
+      dockerfile.indexOf('FROM golang:'),
+      dockerfile.indexOf('\nFROM ubuntu:'),
+    ).trim();
+    expect(ghStage(buildTools)).toBe(ghStage(agent));
+    expect(buildTools).toContain('COPY --from=gh-build /tmp/cli-*/bin/gh /usr/bin/gh');
+    expect(buildTools).not.toContain('gnupg gh');
+    for (const dockerfile of [buildTools, agent]) {
+      expect(dockerfile).toContain('rm -f /usr/bin/pebble');
+    }
+    expect(buildTools).toContain('test "$(gosu nobody id -u)" = 65534');
+  });
+
+  it.each(['success', 'base-build', 'agent-build', 'scan', 'save'])(
+    'retains the shared PR base through dependent builds and cleans up on %s',
+    (failure) => {
+      const step = jobs('supply-chain-scan.yml').scan.steps.find(
+        (entry) => entry.name?.startsWith('Build and scan PR container images'),
+      )!;
+      const python = step.run!.split("<<'PYEOF'\n")[1].split('\nPYEOF')[0];
+      const result = spawnSync('python3', ['-c', `
+import contextlib, io, json, os, subprocess, sys
+from unittest.mock import patch
+code = sys.stdin.read()
+live = set()
+archives = set()
+cache = set()
+calls = []
+saves = []
+failure = sys.argv[1]
+base = 'awf-pr-scan-build-tools:pr'
+agent = 'awf-pr-scan-enclave-agent:pr'
+def run(args, **kwargs):
+    calls.append(args)
+    rc = 0
+    if args[:2] == ['docker', 'build']:
+        tag = args[args.index('-t') + 1]
+        if tag == agent and base not in live:
+            raise AssertionError('base removed before enclave-agent build')
+        cache.add(tag)
+        if (failure == 'base-build' and tag == base) or (failure == 'agent-build' and tag == agent):
+            rc = 1
+        else:
+            live.add(tag)
+    elif args[:2] == ['docker', 'save']:
+        # Disk-lifetime invariant: only the retained base and the image being saved
+        # may remain, with no builder cache or earlier archive on the runner.
+        saves.append({'tag': args[4], 'live': sorted(live), 'cache': sorted(cache),
+                      'archives': sorted(archives)})
+        archives.add(args[3])
+        if failure == 'save':
+            raise subprocess.CalledProcessError(1, args)
+    elif args[:2] == ['docker', 'run'] and failure == 'scan':
+        rc = 2
+    elif args[:3] == ['docker', 'image', 'rm']:
+        live.discard(args[-1])
+    elif args[:3] == ['docker', 'builder', 'prune']:
+        if args != ['docker', 'builder', 'prune', '--all', '--force']:
+            raise AssertionError(args)
+        cache.clear()
+    elif 'prune' in args:
+        raise AssertionError('unexpected image/system prune: ' + ' '.join(args))
+    return subprocess.CompletedProcess(args, rc)
+exit_code = 0
+with patch('subprocess.run', run), patch.dict(os.environ, {'GRYPE_DB': '/tmp/mock-db'}), \\
+     patch('os.path.exists', lambda file: file in archives), patch('os.remove', archives.remove):
+    with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            exec(compile(code, '<workflow>', 'exec'))
+        except SystemExit as error:
+            exit_code = error.code
+        except subprocess.CalledProcessError as error:
+            exit_code = error.returncode
+print(json.dumps({'live': sorted(live), 'archives': sorted(archives), 'cache': sorted(cache),
+                  'saves': saves, 'calls': calls, 'exit': exit_code}))
+`, failure], { cwd: root, input: python, encoding: 'utf8' });
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      const trace = JSON.parse(result.stdout) as {
+        live: string[]; archives: string[]; cache: string[]; calls: string[][]; exit: number;
+        saves: { tag: string; live: string[]; cache: string[]; archives: string[] }[];
+      };
+      expect(trace.live).toEqual([]);
+      expect(trace.archives).toEqual([]);
+      expect(trace.cache).toEqual([]);
+      for (const save of trace.saves) {
+        expect(save.cache).toEqual([]);
+        expect(save.archives).toEqual([]);
+        const base = failure === 'base-build' ? [] : ['awf-pr-scan-build-tools:pr'];
+        expect(save.live).toEqual([...new Set([...base, save.tag])].sort());
+      }
+      expect(trace.saves.length).toBeGreaterThan(0);
+      if (failure === 'success' || failure === 'scan') {
+        expect(trace.saves[trace.saves.length - 2]?.tag).toBe('awf-pr-scan-enclave-agent:pr');
+      }
+      expect(trace.exit).toBe(failure === 'success' ? 0 : failure === 'scan' ? 2 : 1);
+      const agentBuild = trace.calls.find((args) =>
+        args[1] === 'build' && args.includes('awf-pr-scan-enclave-agent:pr'));
+      if (failure === 'base-build' || failure === 'save') {
+        expect(agentBuild).toBeUndefined();
+      } else {
+        expect(agentBuild).toBeDefined();
+      }
+      const scans = trace.calls.filter((args) => args[1] === 'run');
+      for (const args of scans) {
+        expect(args).toContain(grype);
+        expect(args.slice(args.indexOf('--fail-on'), args.indexOf('--fail-on') + 2))
+          .toEqual(['--fail-on', 'high']);
+      }
+      if (failure === 'success' || failure === 'scan') {
+        expect(scans).toHaveLength(9);
+      }
+    },
+  );
+
   const affected = [
     ...Object.keys(jobs('test-chroot.yml')).map((job) => ['test-chroot.yml', job]),
     ['test-examples.yml', 'test-examples'],
@@ -60,7 +178,14 @@ describe('CI registry retrieval', () => {
     expect(blocking?.run).toContain('finally:');
     expect(blocking?.run).toContain('os.remove(tar)');
     expect(blocking?.run).toContain("'docker', 'image', 'rm', '--force', tag");
+    expect(blocking?.run).toContain("['docker', 'builder', 'prune', '--all', '--force']");
+    expect(blocking?.run).not.toMatch(/image', 'prune|system', 'prune/);
     expect(blocking?.['continue-on-error']).toBeUndefined();
+    const free = steps.findIndex((step) => step.name === 'Free unused hosted-runner disk space');
+    expect(free).toBeGreaterThanOrEqual(0);
+    expect(free).toBeLessThan(prepare);
+    expect(steps[free].run).not.toContain('docker');
+    expect(steps[free].run).not.toContain('hostedtoolcache/go');
     expect(steps.find((step) => step.run?.includes(`'${grant}'`))?.run).toContain(grant);
   });
 
