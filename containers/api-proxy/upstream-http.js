@@ -24,6 +24,11 @@ const {
   replaceUpstreamEndpoint,
   translateCopilotWireApi,
 } = require('./wire-api-compat');
+const { createInvocationModelBudget } = require('./enclave-model-budget');
+
+const invocationModelBudget = createInvocationModelBudget(
+  process.env.AWF_ENCLAVE_AGENT_MODEL_BUDGET_SECRET,
+);
 
 /**
  * Backoff delays (ms) between successive model-not-supported retries.
@@ -41,6 +46,45 @@ function rebuildBodyFramingHeaders(headers, bodyLength) {
   }
   reframedHeaders['content-length'] = String(bodyLength);
   return reframedHeaders;
+}
+
+function getRequestCancellation(req, res) {
+  if (req.awfUpstreamCancellation) return req.awfUpstreamCancellation;
+
+  const controller = new AbortController();
+  const externalSignal = req.awfRequestContext?.signal;
+  const cancellation = {
+    controller,
+    cancelled: false,
+    finalized: false,
+    responseStarted: false,
+    activeAttempt: null,
+    onCancel: null,
+    cancel() {
+      if (cancellation.cancelled) return;
+      cancellation.cancelled = true;
+      cancellation.activeAttempt?.settleMissing();
+      externalSignal?.removeEventListener('abort', cancellation.cancel);
+      controller.abort();
+      cancellation.onCancel?.();
+    },
+  };
+  req.awfUpstreamCancellation = cancellation;
+
+  if (res && typeof res.once === 'function') {
+    res.once('close', () => {
+      if (!res.writableFinished) cancellation.cancel();
+    });
+    if (externalSignal) {
+      res.once('finish', () => externalSignal.removeEventListener('abort', cancellation.cancel));
+    }
+  }
+  if (externalSignal) {
+    if (externalSignal.aborted) cancellation.cancel();
+    else externalSignal.addEventListener('abort', cancellation.cancel, { once: true });
+  }
+  if (res?.destroyed && !res.writableFinished) cancellation.cancel();
+  return cancellation;
 }
 
 function rebuildCopilotWireApiFallback(sourceBody, nextModel, req, upstreamPath) {
@@ -96,6 +140,7 @@ function createSendUpstreamRequest({
   isFallbackModelPermitted = null,
   getFallbackModels: getFallbackModelsDep = getFallbackModels,
   getProviderAdapter = null,
+  modelBudget = invocationModelBudget,
 }) {
   return function sendUpstreamRequest(requestHeaders, {
     body, targetHost, upstreamPath, req, res, provider, requestId, startTime, span, requestBytes,
@@ -111,6 +156,17 @@ function createSendUpstreamRequest({
     fallbackOrigin = null,
     protocolTranslation = null,
   }) {
+    const cancellation = getRequestCancellation(req, res);
+    cancellation.responseStarted = false;
+    cancellation.onCancel = () => {
+      if (cancellation.finalized) return;
+      cancellation.finalized = true;
+      metrics.gaugeDec('active_requests', { provider });
+      if (!cancellation.responseStarted) otel.endSpan(span, 0);
+    };
+    if (cancellation.cancelled) cancellation.onCancel();
+    if (cancellation.cancelled) return;
+
     try {
       validateReasoningEffort(body, provider, upstreamPath);
     } catch (err) {
@@ -146,9 +202,6 @@ function createSendUpstreamRequest({
     }
 
     const isRoutingClassifier = req.awfRequestContext?.purpose === 'routing_classification';
-    const cancellationSignal = isRoutingClassifier
-      ? req.awfRequestContext.signal
-      : null;
 
     // ── Ordered model fallback chain ────────────────────────────────────────
     // The origin captures the request as received by the agent-facing
@@ -199,7 +252,7 @@ function createSendUpstreamRequest({
         {
           let fallbackTriggered = false;
           onModelFallback = ({ statusCode = null, reason = 'upstream_error', abandon = null } = {}) => {
-            if (fallbackTriggered || res.headersSent) return false;
+            if (cancellation.cancelled || fallbackTriggered || res.headersSent) return false;
             fallbackTriggered = true;
             const failure = {
               provider,
@@ -264,10 +317,10 @@ function createSendUpstreamRequest({
             const nextOrigin = { ...origin, failures };
             let cancellationFinalized = false;
             const finalizeCancellation = () => {
-              if (cancellationFinalized) return;
+              if (cancellationFinalized || cancellation.finalized) return;
               cancellationFinalized = true;
-              metrics.gaugeDec('active_requests', { provider });
-              otel.endSpan(span, 0);
+              cancellation.cancel();
+              if (cancellation.responseStarted) otel.endSpan(span, 0);
             };
 
             // Same provider as the failed attempt: rewrite the model in place.
@@ -363,6 +416,7 @@ function createSendUpstreamRequest({
 
             const tryCandidates = () => {
               for (;;) {
+                if (cancellation.cancelled) return false;
                 const candidate = select(exclude, logSkip);
                 if (!candidate) return false;
                 const key = attemptKey(candidate.provider, candidate.model);
@@ -400,7 +454,7 @@ function createSendUpstreamRequest({
                   requestId,
                   codexCompatibility: !!origin.codexCompatibility,
                 }).then((built) => {
-                  if (res.headersSent || res.destroyed || res.writableEnded) {
+                  if (cancellation.cancelled || res.headersSent || res.destroyed || res.writableEnded) {
                     finalizeCancellation();
                     return;
                   }
@@ -430,6 +484,10 @@ function createSendUpstreamRequest({
                     protocolTranslation: built.protocolTranslation,
                   });
                 }, (err) => {
+                  if (cancellation.cancelled) {
+                    finalizeCancellation();
+                    return;
+                  }
                   exclude.add(key);
                   logSkip(candidate, err?.code === 'unsupported_protocol_feature' || err?.code === 'unsupported_wire_api_feature'
                     ? `protocol_translation_failed: ${err.feature || err.message}`
@@ -450,6 +508,55 @@ function createSendUpstreamRequest({
         }
       }
     }
+    const budgetAttempt = modelBudget.beginAttempt({
+      authorization: req.headers?.authorization,
+      method: req.method,
+      path: upstreamPath,
+      body,
+    });
+    if (!budgetAttempt.allowed) {
+      const statusCode = budgetAttempt.reason === 'invalid_capability' ? 403 : 429;
+      metrics.gaugeDec('active_requests', { provider });
+      metrics.increment('requests_total', {
+        provider,
+        method: req.method,
+        status_class: '4xx',
+      });
+      logRequest?.('warn', 'enclave_model_budget_rejected', {
+        request_id: requestId,
+        provider,
+        reason: budgetAttempt.reason,
+      });
+      otel.endSpan(span, statusCode);
+      if (res.headersSent) {
+        res.destroy?.();
+        return;
+      }
+      res.writeHead(statusCode, {
+        'Content-Type': 'application/json',
+        'X-Request-ID': requestId,
+      });
+      res.end(JSON.stringify({
+        error: {
+          message: 'Enclave model budget exhausted or invalid',
+          type: 'awf_enclave_model_budget_error',
+          code: `awf_enclave_model_budget_${budgetAttempt.reason}`,
+        },
+      }));
+      return;
+    }
+    cancellation.activeAttempt = budgetAttempt;
+    if (cancellation.cancelled) {
+      budgetAttempt.settleMissing();
+      return;
+    }
+    if (budgetAttempt.body) {
+      body = budgetAttempt.body;
+      requestHeaders = rebuildBodyFramingHeaders(requestHeaders, body.length);
+      requestBytes = body.length;
+    }
+    req.awfEnclaveModelBudgetAttempt = budgetAttempt;
+
     let outboundHeaders = requestHeaders;
     if (requestSigner) {
       try {
@@ -461,6 +568,7 @@ function createSendUpstreamRequest({
           targetHost,
         });
       } catch (err) {
+        budgetAttempt.settleMissing();
         otel.endSpanError(span, err, 503);
         handleRequestError(err, {
           res, requestId, provider, req, targetHost, startTime,
@@ -484,12 +592,17 @@ function createSendUpstreamRequest({
       hostname: targetHost, port: isHttp ? 80 : 443, path: upstreamPath,
       method: req.method, headers: outboundHeaders,
       agent: proxyAgent,
-      ...(cancellationSignal ? { signal: cancellationSignal } : {}),
+      signal: cancellation.controller.signal,
     };
 
     let responded = false;
     const proxyReq = mod.request(options, (proxyRes) => {
+      if (cancellation.cancelled) {
+        proxyRes.destroy?.();
+        return;
+      }
       responded = true;
+      cancellation.responseStarted = true;
       handleUpstreamResponse(proxyRes, outboundHeaders, {
         body, res, provider, requestId, req, targetHost, startTime, span, requestBytes,
         hasRetried,
@@ -516,6 +629,7 @@ function createSendUpstreamRequest({
         onModelNotSupportedRetry: () => {
           const delayMs = MODEL_NOT_SUPPORTED_RETRY_DELAYS_MS[modelNotSupportedRetryCount] ?? 2000;
           sleep(delayMs).then(() => {
+            if (cancellation.cancelled) return;
             sendUpstreamRequest(requestHeaders, {
               body, targetHost, upstreamPath, req, res, provider, requestId, startTime, span, requestBytes, requestSigner,
               hasRetried,
@@ -532,6 +646,7 @@ function createSendUpstreamRequest({
           });
         },
         onWireApiEndpointRetry: () => {
+          if (cancellation.cancelled) return false;
           if (provider !== 'copilot' || !wireApiSourceBody || wireApiEndpointRetryAttempted) return false;
           const requestedEndpoint = endpointForPath(req.url);
           const rejectedEndpoint = endpointForPath(upstreamPath);
@@ -575,6 +690,7 @@ function createSendUpstreamRequest({
           return true;
         },
         onModelEndpointBlockedRetry: provider !== origin.provider ? null : () => {
+          if (cancellation.cancelled) return false;
           // The model resolved from the alias is not accessible via this endpoint
           // (e.g. gpt-5.4-mini on Copilot /chat/completions).  Try the next
           // ranked candidate stored on the request object during body transform.
@@ -647,6 +763,8 @@ function createSendUpstreamRequest({
     });
 
     proxyReq.on('error', (err) => {
+      if (cancellation.cancelled) return;
+      budgetAttempt.settleMissing();
       const failRequest = () => {
         otel.endSpanError(span, err, 502);
         handleRequestError(err, {
