@@ -1,10 +1,13 @@
 'use strict';
 
+const zlib = require('zlib');
 const { stripRedundantProviderPrefix } = require('./model-utils');
 const { isValidRequestId } = require('./request-headers');
 const { generateRequestId } = require('./logging');
+const { extractProviderErrorFields } = require('./provider-error-fields');
 
 const MAX_TELEMETRY_VALUE_LENGTH = 200;
+const MAX_ERROR_INSPECTION_BYTES = 16_384;
 const TELEMETRY_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 /**
@@ -39,6 +42,46 @@ function selectedEndpointFor(selection, provider, effort) {
   if (typeof selection.endpoint === 'string') return selection.endpoint;
   if (provider === 'anthropic') return '/v1/messages';
   return effort === null ? '/chat/completions' : '/responses';
+}
+
+/**
+ * Error identifiers for a failed request record. AWF's own rejection of the
+ * attempt wins over anything observed in the response body, because the
+ * provider never saw that attempt.
+ */
+function requestErrorFields(localError, upstreamFields) {
+  const local = localError ? extractProviderErrorFields({ error: localError }) : {};
+  const [source, fields] = local.error_code || local.error_type
+    ? ['awf', local]
+    : ['upstream', upstreamFields || {}];
+  const result = {};
+  if (fields.error_code) result.error_code = fields.error_code;
+  if (fields.error_type) result.error_type = fields.error_type;
+  if (Object.keys(result).length > 0) result.error_source = source;
+  return result;
+}
+
+/**
+ * Parse a bounded, decoded copy of an error body. Only gzip, deflate, and
+ * Brotli are decoded, and decoding stops at MAX_ERROR_INSPECTION_BYTES.
+ * Throws when the body cannot be decoded or parsed.
+ */
+function parseEncodedErrorBody(buffer, contentEncoding) {
+  const encoding = typeof contentEncoding === 'string' ? contentEncoding.trim().toLowerCase() : '';
+  const options = { maxOutputLength: MAX_ERROR_INSPECTION_BYTES };
+  let decoded;
+  if (encoding === 'gzip' || encoding === 'x-gzip') decoded = zlib.gunzipSync(buffer, options);
+  else if (encoding === 'deflate') decoded = zlib.inflateSync(buffer, options);
+  else if (encoding === 'br') decoded = zlib.brotliDecompressSync(buffer, options);
+  else return null;
+  return JSON.parse(decoded.toString('utf8'));
+}
+
+/** Keep the first set of provider error fields observed for a request. */
+function rememberErrorFields(state, value) {
+  if (state.errorFields) return;
+  const fields = extractProviderErrorFields(value);
+  if (fields.error_code || fields.error_type) state.errorFields = fields;
 }
 
 /** Extract the effort a request body asks for, in the shape of its endpoint. */
@@ -86,6 +129,7 @@ function createRoutingObservation({
         request_id: req.awfRouting.requestId || res.getHeader?.('X-Request-ID') || null,
         outcome,
         status: res.statusCode,
+        ...(outcome === 'failed' ? requestErrorFields(req.awfRouting.localError, state.errorFields) : {}),
       });
       if (!res.writableFinished && state.selectedModel) {
         recordFailure('provider_unavailable');
@@ -118,7 +162,7 @@ function createRoutingObservation({
     };
   }
 
-  function observeFailure(res, state) {
+  function observeFailure(res, state, recordsRoutingFailure) {
     const originalWrite = res.write;
     const originalEnd = res.end;
     const chunks = [];
@@ -141,13 +185,23 @@ function createRoutingObservation({
     };
     res.end = function(chunk, encoding, callback) {
       collect(chunk, encoding);
-      if (res.statusCode >= 400 && state.selectedModel) {
-        let code;
+      if (res.statusCode >= 400) {
+        let parsed = null;
         try {
-          const error = bytes <= 16_384 ? JSON.parse(Buffer.concat(chunks).toString('utf8')).error : null;
-          code = error?.code || error?.type;
+          parsed = bytes <= 16_384 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
         } catch {}
-        recordNativeFailure(code);
+        try {
+          // The client receives the bytes unchanged; a compressed upstream
+          // body is inspected only through a bounded, decoded copy.
+          rememberErrorFields(state, parsed ?? (bytes <= MAX_ERROR_INSPECTION_BYTES
+            ? parseEncodedErrorBody(Buffer.concat(chunks), state.upstreamContentEncoding) : null));
+        } catch {
+          // Observability must not change the live response.
+        }
+        if (recordsRoutingFailure && state.selectedModel) {
+          const error = parsed?.error;
+          recordNativeFailure(error?.code || error?.type);
+        }
       }
       return originalEnd.call(this, chunk, encoding, callback);
     };
@@ -226,9 +280,7 @@ function createRoutingObservation({
         telemetry: requestTelemetry(req, pathname, adapter, selection),
       };
       const responseHooks = trackResponse(req, res, state);
-      if (adapter.name === (selection.provider || 'copilot')) {
-        observeFailure(res, state);
-      }
+      observeFailure(res, state, adapter.name === (selection.provider || 'copilot'));
       const onSseData = line => {
         let event;
         try {
@@ -238,6 +290,7 @@ function createRoutingObservation({
         }
         if (event?.error || event?.type === 'response.failed' || event?.type === 'error') {
           state.sseFailed = true;
+          rememberErrorFields(state, event);
           if (state.selectedModel) {
             const error = event.error || event.response?.error || event;
             recordNativeFailure(error.code || error.type);
@@ -266,6 +319,9 @@ function createRoutingObservation({
             ...state.telemetry,
             upstream_endpoint: compatibility.upstreamEndpoint,
           };
+        },
+        onUpstreamResponseHeaders(headers) {
+          state.upstreamContentEncoding = headers?.['content-encoding'];
         },
         onSseData,
         onSseInspectionStart: responseHooks.sseInspectionStart,

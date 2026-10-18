@@ -2238,6 +2238,14 @@ completion. Stream errors and premature closure MUST NOT be treated as
 completion merely because HTTP headers indicated success. When token usage is
 available, `request_id` MUST correlate with the corresponding
 `token-usage.jsonl` record; not every rejected or aborted call produces usage.
+A `failed` request record MUST include `error_code` and `error_type` when an
+identifier-shaped value matching `^[A-Za-z0-9_.:-]{1,64}$` is available, and
+`error_source` whenever either is present: `upstream` when taken from the
+provider's JSON error body (decoded when it is `gzip`, `deflate`, or `br`
+encoded) or first SSE error event, or `awf` whenever AWF produced the error
+body in the response, including when AWF replaced a provider's rejection with
+its own envelope. These fields MUST NOT contain the provider's error `message`
+and MUST be omitted, not `null`, when no valid value exists.
 
 These records MUST NOT contain raw conversation or prompt text, raw classifier
 output, or request/response bodies. Optional conversation capture is not

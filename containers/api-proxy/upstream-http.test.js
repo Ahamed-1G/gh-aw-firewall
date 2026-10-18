@@ -5,6 +5,8 @@ const {
 } = require('./upstream-http');
 const { clearRuntimeModels, replaceRuntimeModels } = require('./runtime-model-catalog');
 const { translateCopilotWireApi } = require('./wire-api-compat');
+const { EventEmitter } = require('events');
+const { createRoutingObservation } = require('./routing-observation');
 
 describe('upstream-http', () => {
   afterEach(() => clearRuntimeModels());
@@ -457,6 +459,142 @@ describe('upstream-http', () => {
       body: retryBody,
       headers: expect.objectContaining({ 'content-length': String(retryBody.length) }),
     }));
+  });
+
+  test('marks a local unsupported_reasoning_effort rejection on req.awfRouting', () => {
+    replaceRuntimeModels('copilot', [{ id: 'low-only-model', supportedReasoningEfforts: ['low'] }]);
+    const records = [];
+    const observation = createRoutingObservation({
+      getSelection: () => ({
+        schema: 'awf-routing-selection/v1',
+        engine: 'copilot',
+        provider: 'copilot',
+        choice: { id: 'choice-0001', model: 'github-copilot/low-only-model' },
+        wire_model: 'low-only-model',
+      }),
+      recordFailure: jest.fn(),
+      observer: { record: record => records.push(record) },
+      generateRequestId: () => 'req-1',
+    });
+    const res = new EventEmitter();
+    const written = [];
+    res.statusCode = 200;
+    res.headersSent = false;
+    res.writeHead = jest.fn((statusCode) => { res.statusCode = statusCode; });
+    res.write = jest.fn();
+    res.end = jest.fn((chunk) => {
+      written.push(chunk);
+      res.writableFinished = true;
+      res.emit('finish');
+    });
+    const req = { method: 'POST', url: '/v1/chat/completions', headers: {} };
+    observation.observeRequest(req, res, { name: 'copilot' });
+    const body = Buffer.from(JSON.stringify({ model: 'low-only-model', reasoning_effort: 'high', messages: [] }));
+    req.awfRouting.bodyTransform(body);
+    const httpsRequest = jest.fn();
+    const handleUpstreamResponse = jest.fn();
+    const sendUpstreamRequest = createSendUpstreamRequest({
+      https: { request: httpsRequest },
+      proxyAgent: {},
+      handleUpstreamResponse,
+      sleep: jest.fn(),
+      otel: { endSpanError: jest.fn(), endSpan: jest.fn() },
+      handleRequestError: jest.fn(),
+      metrics: { gaugeDec: jest.fn(), increment: jest.fn(), observe: jest.fn() },
+    });
+
+    sendUpstreamRequest({ 'content-length': String(body.length) }, createContext({
+      body,
+      requestBytes: body.length,
+      req,
+      res,
+    }));
+
+    expect(httpsRequest).not.toHaveBeenCalled();
+    expect(handleUpstreamResponse).not.toHaveBeenCalled();
+    expect(req.awfRouting.localError).toEqual({
+      code: 'unsupported_reasoning_effort',
+      type: 'invalid_request_error',
+    });
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json', 'X-Request-ID': 'req-1' });
+    expect(written).toEqual([JSON.stringify({
+      error: {
+        message: 'reasoning_effort "high" is not supported by model low-only-model; supported values: [low]',
+        type: 'invalid_request_error',
+        code: 'unsupported_reasoning_effort',
+      },
+    })]);
+    expect(records).toEqual([expect.objectContaining({
+      outcome: 'failed',
+      status: 400,
+      error_code: 'unsupported_reasoning_effort',
+      error_type: 'invalid_request_error',
+      error_source: 'awf',
+    })]);
+  });
+
+  test('marks model_fallback_exhausted as AWF-originated without changing the 502 response', async () => {
+    const records = [];
+    const observation = createRoutingObservation({
+      getSelection: () => ({ provider: 'copilot', choice: {}, wire_model: 'gpt-test' }),
+      recordFailure: jest.fn(),
+      observer: { record: record => records.push(record) },
+      generateRequestId: () => 'req-1',
+    });
+    const res = new EventEmitter();
+    const written = [];
+    res.statusCode = 200;
+    res.headersSent = false;
+    res.writeHead = jest.fn((statusCode) => { res.statusCode = statusCode; res.headersSent = true; });
+    res.write = jest.fn();
+    res.end = jest.fn((chunk) => {
+      written.push(chunk);
+      res.writableFinished = true;
+      res.emit('finish');
+    });
+    const req = { method: 'POST', url: '/v1/chat/completions', headers: {} };
+    observation.observeRequest(req, res, { name: 'copilot' });
+    // `n` cannot be translated to Anthropic Messages, so the only candidate fails to build.
+    const body = Buffer.from(JSON.stringify({ model: 'gpt-test', n: 2, messages: [{ role: 'user', content: 'hi' }] }));
+    let onModelFallback;
+    const sendUpstreamRequest = createSendUpstreamRequest({
+      https: { request: jest.fn((_options, cb) => {
+        cb({ statusCode: 503, headers: {} });
+        return { on: jest.fn(), write: jest.fn(), end: jest.fn() };
+      }) },
+      proxyAgent: {},
+      handleUpstreamResponse: jest.fn((_proxyRes, _headers, ctx) => { onModelFallback = ctx.onModelFallback; }),
+      sleep: jest.fn(),
+      otel: { endSpanError: jest.fn(), endSpan: jest.fn() },
+      handleRequestError: jest.fn(),
+      metrics: { gaugeDec: jest.fn(), gaugeInc: jest.fn(), increment: jest.fn(), observe: jest.fn() },
+      logRequest: jest.fn(),
+      getFallbackModels: () => ['anthropic/claude-sonnet-4.6'],
+      getProviderAdapter: () => ({ name: 'anthropic', isEnabled: () => true }),
+    });
+
+    sendUpstreamRequest({ 'content-length': String(body.length) }, createContext({
+      body, requestBytes: body.length, req, res,
+    }));
+    expect(onModelFallback({ statusCode: 503, reason: 'upstream_5xx' })).toBe(true);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(req.awfRouting.localError).toEqual({ code: 'model_fallback_exhausted', type: 'model_fallback_exhausted' });
+    expect(res.writeHead).toHaveBeenCalledWith(502, { 'Content-Type': 'application/json', 'X-Request-ID': 'req-1' });
+    expect(written).toEqual([JSON.stringify({
+      error: {
+        message: 'Upstream request failed and no fallback model could be dispatched',
+        type: 'model_fallback_exhausted',
+        code: 'model_fallback_exhausted',
+      },
+    })]);
+    expect(records).toEqual([expect.objectContaining({
+      outcome: 'failed',
+      status: 502,
+      error_code: 'model_fallback_exhausted',
+      error_type: 'model_fallback_exhausted',
+      error_source: 'awf',
+    })]);
   });
 
   test.each(['ordered fallback', 'endpoint-blocked fallback'])(
