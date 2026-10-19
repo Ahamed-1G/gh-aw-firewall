@@ -110,6 +110,21 @@ separate invocation destination outside the private allocation. No registry
 finding matches the v0.28.43 failure yet; a release-pinned observation is needed
 before claiming a root cause.
 
+For an eligible attested, static public-only Cloud Hypervisor enclave, inspect
+the protected run-cumulative `enclave-proxy-events.jsonl` and closed-vocabulary
+`enclave-proxy-container.log`, separately from per-invocation `enclave-session.log`.
+Proxy projections are retained under the run's protected journal identity even
+when no invocation debug directory exists. Raw dedicated-proxy stdout/stderr is not
+published because it can include credentials and prompts.
+Distinguish an observed local rejection from an upstream non-2xx; missing
+request accounting or token records does not prove the client made no request.
+The primary agent's `api-proxy-logs` do not diagnose the dedicated enclave
+proxy. Check collection status separately from the original invocation and
+cleanup failures. Public visibility permits protected retention under the
+explicit disclosure policy, not unrestricted publication; private, mixed, and
+dynamic scopes must not expose these records. The 403 in smoke run
+39192139592 has no established canonical diagnosis finding.
+
 ## Agent entry point
 
 Agents should load [`.github/skills/diagnose-awf/SKILL.md`](../../.github/skills/diagnose-awf/SKILL.md).
