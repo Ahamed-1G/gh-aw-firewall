@@ -224,6 +224,61 @@ are tracked there for compiler/MCP Gateway fixes, with AWF-side tracking in
   the compiler's safe-output-file access rule as a workaround. That rule and
   any ownership-only exception also require an upstream compiler change.
 
+### Verify skipped threat detection on ARC/DinD
+
+The conclusion fix is in `gh-aw` [#67810](https://github.com/github/gh-aw/pull/67810),
+not AWF. Before testing, record the **executed** workflow commit, compiler and
+AWF versions, and the `github/gh-aw-actions/setup@<SHA>` pin from its compiled
+lock. For example, the v0.92.5 locks in this repository pin
+`ebb97091a4afcc9bf2d594071dbabe861e9a34fc`; its
+`setup/sh/conclude_threat_detection.sh` includes the explicit
+`RUN_DETECTION=false`, `THREAT_DETECT_INSTALL_OUTCOME=skipped` branch. A pin in
+the checkout alone does not establish which revision an ARC runner executed.
+
+On an authorized ARC/DinD runner, run the pinned workflow with detection
+deliberately skipped (no safe outputs or patches). Where authorized, repeat
+using repository-owned Actions API cancellation, not a cancellation of another
+repository's run. In each run, inspect the actual detection guard, installation
+and conclusion steps: the guard must output `false`, installation must be
+`skipped`, and the conclusion step must succeed with `conclusion=skipped`,
+`success=true`, and an empty `reason`. It must not report a missing binary or
+`reason=agent_failure`. A cancelled *job* may never reach the conclusion step;
+record that separately rather than counting it as a successful skip.
+
+To check the pinned script in isolation on the same runner **after setup has
+staged the actions**, use a disposable output file (this does not replace the
+end-to-end ARC run):
+
+```bash
+script="${RUNNER_TEMP}/gh-aw/actions/conclude_threat_detection.sh"
+test -f "$script"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/bin"
+ln -s "$(command -v dirname)" "$work/bin/dirname"
+GITHUB_OUTPUT="$work/skipped" RUN_DETECTION=false \
+  THREAT_DETECT_INSTALL_OUTCOME=skipped GH_AW_DETECTION_CONTINUE_ON_ERROR=false \
+  PATH="$work/bin" /bin/bash "$script" "$work/absent-result.json"
+grep -Fx 'conclusion=skipped' "$work/skipped"
+grep -Fx 'success=true' "$work/skipped"
+grep -Fx 'reason=' "$work/skipped"
+if GITHUB_OUTPUT="$work/required" RUN_DETECTION=true \
+  THREAT_DETECT_INSTALL_OUTCOME=skipped GH_AW_DETECTION_CONTINUE_ON_ERROR=false \
+  PATH="$work/bin" /bin/bash "$script" "$work/absent-result.json"; then
+  echo "Required detection unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fx 'conclusion=failure' "$work/required"
+grep -Fx 'success=false' "$work/required"
+```
+
+The isolated `PATH` excludes `threat-detect` for both cases; the second case
+confirms that a required detector still fails closed in strict mode. Preserve
+only redacted conclusion outputs, step outcomes, exact versions/pins, and run
+links. Do not close the ARC finding based on the isolated check or a compiled
+pin alone; if the live conclusion disagrees, report the narrower failure to
+`github/gh-aw` with that evidence.
+
 ## Locating API proxy token-usage logs
 
 The api-proxy writes `token-usage.jsonl` into `<proxy-logs-dir>/api-proxy-logs/`
