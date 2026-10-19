@@ -26,9 +26,12 @@ import {
 } from './preflight-diagnostics';
 import {
   createArtifactSnapshot,
+  createCommonArtifactSnapshot,
   copySparseFileWithRsync,
   type CloudHypervisorArtifactSnapshot,
   type CloudHypervisorArtifactSnapshotSources,
+  type CloudHypervisorCommonArtifactSnapshot,
+  type CloudHypervisorCommonArtifactSnapshotSources,
 } from './artifact-snapshot';
 import {
   assertDigest,
@@ -71,6 +74,10 @@ export interface CloudHypervisorPreflightDependencies extends CloudHypervisorArt
     sources: CloudHypervisorArtifactSnapshotSources,
     copySparseFile: (source: string, destination: string) => Promise<void>,
   ): Promise<CloudHypervisorArtifactSnapshot>;
+  createCommonArtifactSnapshot(
+    sources: CloudHypervisorCommonArtifactSnapshotSources,
+    copySparseFile: (source: string, destination: string) => Promise<void>,
+  ): Promise<CloudHypervisorCommonArtifactSnapshot>;
   copySparseFile(rsyncBinaryPath: string, source: string, destination: string): Promise<void>;
   removeArtifactSnapshot(directory: string): Promise<void>;
   verifyManifestAttestation(
@@ -203,6 +210,7 @@ const defaultDependencies: CloudHypervisorPreflightDependencies = {
   sha256: calculateSha256,
   readFile: async (filePath) => fs.readFile(filePath, 'utf8'),
   createArtifactSnapshot: createArtifactSnapshot,
+  createCommonArtifactSnapshot,
   copySparseFile: copySparseFileWithRsync,
   removeArtifactSnapshot: async (directory) => {
     await fs.rm(directory, { recursive: true, force: true });
@@ -338,6 +346,11 @@ export interface CloudHypervisorPreflightResult {
   /** Group ID that owns `/dev/kvm`, retained as the launcher's sole supplementary group. */
   kvmGid: number;
 }
+
+export type CloudHypervisorCommonPreflightResult =
+  Omit<CloudHypervisorPreflightResult, 'rootfsPath' | 'artifactDigests'> & {
+    artifactDigests: Omit<Required<CloudHypervisorArtifactDigests>, 'rootfs'>;
+  };
 
 export const CLOUD_HYPERVISOR_MAX_BOOT_ATTEMPTS = 3;
 
@@ -484,6 +497,39 @@ export async function runCloudHypervisorPreflight(
   config: CloudHypervisorOptions,
   overrides: Partial<CloudHypervisorPreflightDependencies> = {},
 ): Promise<CloudHypervisorPreflightResult> {
+  const result = await runPreflight(config, overrides, false);
+  if (!('rootfsPath' in result)) throw new Error('Primary Cloud Hypervisor rootfs is missing');
+  return result;
+}
+
+export async function runCloudHypervisorCommonPreflight(
+  config: CloudHypervisorOptions,
+  overrides: Partial<CloudHypervisorPreflightDependencies> = {},
+): Promise<CloudHypervisorCommonPreflightResult> {
+  return runPreflight(config, overrides, true);
+}
+
+function hasPrimaryRootfs(
+  snapshot: CloudHypervisorCommonArtifactSnapshot,
+): snapshot is CloudHypervisorArtifactSnapshot {
+  return 'rootfsPath' in snapshot && typeof snapshot.rootfsPath === 'string';
+}
+
+function runPreflight(
+  config: CloudHypervisorOptions,
+  overrides: Partial<CloudHypervisorPreflightDependencies>,
+  commonOnly: true,
+): Promise<CloudHypervisorCommonPreflightResult>;
+function runPreflight(
+  config: CloudHypervisorOptions,
+  overrides: Partial<CloudHypervisorPreflightDependencies>,
+  commonOnly: false,
+): Promise<CloudHypervisorPreflightResult>;
+async function runPreflight(
+  config: CloudHypervisorOptions,
+  overrides: Partial<CloudHypervisorPreflightDependencies>,
+  commonOnly: boolean,
+): Promise<CloudHypervisorCommonPreflightResult | CloudHypervisorPreflightResult> {
   const report = overrides.hostPreflightReporter ?? new HostPreflightReporter('bounded-runtime');
   const dependencies = {
     ...defaultDependencies,
@@ -492,7 +538,10 @@ export async function runCloudHypervisorPreflight(
   };
   const developmentBypass = config.developmentAllowUnattestedArtifacts === true;
   await report.check('artifact-configuration', () => {
-    if (!config.kernelPath || !config.rootfsPath || !config.supervisorPath) {
+    if (commonOnly && developmentBypass) {
+      throw new Error('Enclave common artifacts require an attested primary manifest');
+    }
+    if (!config.kernelPath || (!commonOnly && !config.rootfsPath) || !config.supervisorPath) {
       throw new Error(
         'Cloud Hypervisor requires guest kernel, rootfs, and supervisor artifact paths',
       );
@@ -549,12 +598,13 @@ export async function runCloudHypervisorPreflight(
     constants.R_OK,
     dependencies,
   ));
-  await report.check('rootfs-trust', () => assertTrustedRegularFile(
-    'Cloud Hypervisor rootfs',
-    config.rootfsPath!,
-    constants.R_OK,
-    dependencies,
-  ));
+  if (!commonOnly) {
+    await report.check('rootfs-trust', () => assertTrustedRegularFile(
+      'Cloud Hypervisor rootfs', config.rootfsPath!, constants.R_OK, dependencies,
+    ));
+  } else {
+    report.notRequired('rootfs-trust');
+  }
   await report.check('supervisor-trust', () => assertTrustedRegularFile(
     'Cloud Hypervisor guest supervisor',
     config.supervisorPath!,
@@ -575,8 +625,9 @@ export async function runCloudHypervisorPreflight(
       constants.R_OK,
       dependencies,
     ));
-    const candidate = path.join(path.dirname(config.rootfsPath!), 'rootfs.sbom.spdx.json');
-    rootfsSbomPath = await report.check('sbom-trust', async () => {
+    if (!commonOnly) {
+      const candidate = path.join(path.dirname(config.rootfsPath!), 'rootfs.sbom.spdx.json');
+      rootfsSbomPath = await report.check('sbom-trust', async () => {
       try {
         await dependencies.lstat(candidate);
       } catch (error) {
@@ -585,29 +636,35 @@ export async function runCloudHypervisorPreflight(
       }
       await assertTrustedRegularFile('Cloud Hypervisor rootfs SBOM', candidate, constants.R_OK, dependencies);
       return candidate;
-    });
+      });
+    }
   }
   if (!rootfsSbomPath) report.notRequired('sbom-trust');
 
-  const snapshot = await report.check('artifact-snapshot', () => dependencies.createArtifactSnapshot(
-    {
+  const commonSources = {
       cloudHypervisorBinary: config.cloudHypervisorBinary,
       virtiofsdBinary,
       kernelPath: config.kernelPath!,
-      rootfsPath: config.rootfsPath!,
       supervisorPath: config.supervisorPath!,
-      ...(rootfsSbomPath ? { rootfsSbomPath } : {}),
       ...(!developmentBypass
         ? {
           manifestPath: config.artifactManifestPath!,
           bundlePath: config.artifactManifestBundlePath!,
         }
         : {}),
-    },
-    (source, destination) =>
-      dependencies.copySparseFile(tools.rsync, source, destination),
-  ));
+  };
+  const copy = (source: string, destination: string) =>
+    dependencies.copySparseFile(tools.rsync, source, destination);
+  const snapshot = await report.check('artifact-snapshot', () => commonOnly
+    ? dependencies.createCommonArtifactSnapshot(commonSources, copy)
+    : dependencies.createArtifactSnapshot({
+      ...commonSources, rootfsPath: config.rootfsPath!,
+      ...(rootfsSbomPath ? { rootfsSbomPath } : {}),
+    }, copy));
   try {
+    if (!commonOnly && !hasPrimaryRootfs(snapshot)) {
+      throw new Error('Primary Cloud Hypervisor rootfs snapshot is missing');
+    }
     let artifactDigests: Required<CloudHypervisorArtifactDigests>;
     if (developmentBypass) {
       if (!hasCompleteArtifactDigests(config.sha256)) {
@@ -617,35 +674,51 @@ export async function runCloudHypervisorPreflight(
       }
       artifactDigests = config.sha256;
     } else {
+      if (!snapshot.manifestPath || !snapshot.bundlePath) {
+        throw new Error('Cloud Hypervisor attested artifact snapshot is missing its manifest or bundle');
+      }
+      const manifestPath = snapshot.manifestPath;
+      const bundlePath = snapshot.bundlePath;
       const ghBinaryPath = await report.check('tool-gh', () => dependencies.assertToolAvailable('gh'));
       await report.check('manifest-attestation', () => dependencies.verifyManifestAttestation(
         ghBinaryPath,
-        snapshot.manifestPath!,
-        snapshot.bundlePath!,
+        manifestPath,
+        bundlePath,
       ));
       const manifest = await report.check('manifest-contents', async () => {
         const parsed = parseCloudHypervisorArtifactManifest(
-          await dependencies.readFile(snapshot.manifestPath!),
+          await dependencies.readFile(manifestPath),
           config.artifactReleaseTag!,
         );
-        assertArtifactBasenames(parsed, {
+        const basenames = {
           cloudHypervisor: config.cloudHypervisorBinary,
           virtiofsd: virtiofsdBinary,
           kernel: config.kernelPath!,
-          rootfs: config.rootfsPath!,
           supervisor: config.supervisorPath!,
-        });
+        };
+        if (commonOnly) {
+          for (const name of ['cloudHypervisor', 'virtiofsd', 'kernel', 'supervisor'] as const) {
+            if (path.basename(basenames[name]) !== parsed.artifacts[name].file) {
+              throw new Error(`Cloud Hypervisor ${name} artifact basename mismatch`);
+            }
+          }
+        } else {
+          assertArtifactBasenames(parsed, { ...basenames, rootfs: config.rootfsPath! });
+        }
         return parsed;
       });
       artifactDigests = artifactDigestsFromManifest(manifest);
-      if (manifest.artifacts.rootfs.sbom) {
-        if (!snapshot.rootfsSbomPath) throw new Error('Cloud Hypervisor rootfs SBOM snapshot is missing');
+      if (!commonOnly && manifest.artifacts.rootfs.sbom) {
+        if (!hasPrimaryRootfs(snapshot) || !snapshot.rootfsSbomPath) {
+          throw new Error('Cloud Hypervisor rootfs SBOM snapshot is missing');
+        }
+        const sbomPath = snapshot.rootfsSbomPath;
         await report.check('sbom-digest', () => assertDigest(
-          'Cloud Hypervisor rootfs SBOM', snapshot.rootfsSbomPath!,
+          'Cloud Hypervisor rootfs SBOM', sbomPath,
           manifest.artifacts.rootfs.sbom!.sha256, dependencies,
         ));
         await report.check('sbom-contents', async () => {
-          const document: unknown = JSON.parse(await dependencies.readFile(snapshot.rootfsSbomPath!));
+          const document: unknown = JSON.parse(await dependencies.readFile(sbomPath));
           const sbom = document as {
             spdxVersion?: unknown;
             packages?: Array<{ SPDXID?: string; checksums?: Array<{ algorithm?: string; checksumValue?: string }> }>;
@@ -710,12 +783,15 @@ export async function runCloudHypervisorPreflight(
       artifactDigests.kernel,
       dependencies,
     ));
-    await report.check('rootfs-digest', () => assertDigest(
-      'Cloud Hypervisor rootfs',
-      snapshot.rootfsPath,
-      artifactDigests.rootfs,
-      dependencies,
-    ));
+    if (!commonOnly) {
+      if (!hasPrimaryRootfs(snapshot)) throw new Error('Primary Cloud Hypervisor rootfs snapshot is missing');
+      const rootfsPath = snapshot.rootfsPath;
+      await report.check('rootfs-digest', () => assertDigest(
+        'Cloud Hypervisor rootfs', rootfsPath, artifactDigests.rootfs, dependencies,
+      ));
+    } else {
+      report.notRequired('rootfs-digest');
+    }
     await report.check('supervisor-digest', () => assertDigest(
       'Cloud Hypervisor guest supervisor',
       snapshot.supervisorPath,
@@ -772,18 +848,28 @@ export async function runCloudHypervisorPreflight(
     tools.docker = dockerBinaryPath;
     await report.check('docker-infrastructure', () => dependencies.assertDockerInfrastructure(dockerBinaryPath, report));
 
-    return {
+    const commonResult: CloudHypervisorCommonPreflightResult = {
       version,
       cloudHypervisorBinary: snapshot.cloudHypervisorBinary,
       virtiofsdBinary: snapshot.virtiofsdBinary,
       kernelPath: snapshot.kernelPath,
-      rootfsPath: snapshot.rootfsPath,
       supervisorPath: snapshot.supervisorPath,
       artifactSnapshotDirectory: snapshot.directory,
-      artifactDigests,
+      artifactDigests: {
+        cloudHypervisor: artifactDigests.cloudHypervisor,
+        virtiofsd: artifactDigests.virtiofsd,
+        kernel: artifactDigests.kernel,
+        supervisor: artifactDigests.supervisor,
+      },
       tools,
       cgroupVersion,
       kvmGid,
+    };
+    if (commonOnly) return commonResult;
+    if (!hasPrimaryRootfs(snapshot)) throw new Error('Primary Cloud Hypervisor rootfs snapshot is missing');
+    return {
+      ...commonResult, rootfsPath: snapshot.rootfsPath,
+      artifactDigests: { ...commonResult.artifactDigests, rootfs: artifactDigests.rootfs },
     };
   } catch (error) {
     await dependencies.removeArtifactSnapshot(snapshot.directory);

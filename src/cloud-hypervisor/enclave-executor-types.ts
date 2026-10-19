@@ -14,9 +14,13 @@ import type {
 import type {
   CloudHypervisorArtifactSnapshot,
   CloudHypervisorArtifactSnapshotSources,
+  CloudHypervisorCommonArtifactSnapshot,
+  CloudHypervisorCommonArtifactSnapshotSources,
 } from './artifact-snapshot';
 import type { CloudHypervisorManagerDependencies } from './manager-types';
-import type { CloudHypervisorHostToolPaths, CloudHypervisorPreflightResult } from './preflight';
+import type {
+  CloudHypervisorHostToolPaths, CloudHypervisorPreflightResult,
+} from './preflight';
 import type { assertBoundedEnclaveStorage } from './enclave-storage';
 import type { CloudHypervisorWorkloadProfile } from './workload-profile';
 
@@ -70,7 +74,7 @@ export interface HostEnclaveExecutorManager {
 
 export interface HostEnclaveExecutorDependencies {
   readonly readSessionDiagnostics?: typeof import('./enclave-session-diagnostics').readEnclaveSessionDiagnostics;
-  readonly preflight?: typeof import('./preflight').runCloudHypervisorPreflight;
+  readonly preflight?: typeof import('./preflight').runCloudHypervisorCommonPreflight;
   readonly preflightEnclaveArtifacts?: typeof import('./enclave-artifact-preflight').preflightCloudHypervisorEnclaveArtifacts;
   readonly prepareInvocationStorage?: (
     run: HostExecutorRunState,
@@ -90,6 +94,12 @@ export interface HostEnclaveExecutorDependencies {
     onDirectoryCreated?: (directory: string) => Promise<void>,
     report?: import('./host-preflight-progress').HostPreflightReporter,
   ) => Promise<CloudHypervisorArtifactSnapshot>;
+  readonly createCommonArtifactSnapshot: (
+    sources: CloudHypervisorCommonArtifactSnapshotSources,
+    copySparseFile: (source: string, destination: string) => Promise<void>,
+    onDirectoryCreated?: (directory: string) => Promise<void>,
+    report?: import('./host-preflight-progress').HostPreflightReporter,
+  ) => Promise<CloudHypervisorCommonArtifactSnapshot>;
   readonly createResourceJournal: (
     run: HostExecutorRunState,
     plan: HostExecutorInvocationPlan,

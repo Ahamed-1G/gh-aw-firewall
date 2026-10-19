@@ -34,6 +34,7 @@ import {
 import type { CloudHypervisorOptions } from '../types/runtime-options';
 import {
   createArtifactSnapshot,
+  createCommonArtifactSnapshot,
   type CloudHypervisorArtifactSnapshot,
 } from './artifact-snapshot';
 import { calculateSha256 } from './artifact-trust';
@@ -50,8 +51,8 @@ import type {
   CloudHypervisorManagerDependencies,
   CloudHypervisorManagerGuestConfig,
 } from './manager-types';
-import type { CloudHypervisorPreflightResult } from './preflight';
-import { copySparseFileWithRsync, runCloudHypervisorPreflight } from './preflight';
+import type { CloudHypervisorCommonPreflightResult, CloudHypervisorPreflightResult } from './preflight';
+import { copySparseFileWithRsync, runCloudHypervisorCommonPreflight } from './preflight';
 import {
   preflightCloudHypervisorEnclaveArtifacts,
   resolveTrustedAttestationTool,
@@ -102,6 +103,8 @@ function hasControlCharacters(value: string): boolean {
 const defaultDependencies: HostEnclaveExecutorDependencies = {
   createArtifactSnapshot: (sources, copy, onDirectoryCreated, report) =>
     createArtifactSnapshot(sources, copy, onDirectoryCreated, undefined, report),
+  createCommonArtifactSnapshot: (sources, copy, onDirectoryCreated, report) =>
+    createCommonArtifactSnapshot(sources, copy, onDirectoryCreated, undefined, report),
   createResourceJournal: (run, plan, vmRunId) => HostExecutorResourceJournal.create(run, plan, vmRunId),
   copySparseFile: copySparseFileWithRsync,
   removeArtifactSnapshot: async (directory) => fs.rm(directory, { recursive: true, force: true }),
@@ -169,7 +172,7 @@ export async function createCloudHypervisorHostEnclaveExecutor(
   }
   const attestationToolPath = await resolveTrustedAttestationTool(environment);
   options.onPreflightStage?.('host-preflight');
-  const preflight = await (dependencies.preflight ?? runCloudHypervisorPreflight)(options.config);
+  const preflight = await (dependencies.preflight ?? runCloudHypervisorCommonPreflight)(options.config);
   try {
     options.onPreflightStage?.('recovery');
     await reapHostExecutorResources(
@@ -331,7 +334,7 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       readonly workDir: string;
       readonly publicDebugArtifactDirectory?: string;
       readonly publicDebugArtifactProtectedRoot?: string;
-      readonly preflight: CloudHypervisorPreflightResult;
+      readonly preflight: CloudHypervisorCommonPreflightResult;
       readonly enclaveArtifacts: VerifiedCloudHypervisorEnclaveArtifacts;
       readonly agentPolicies?: Readonly<Record<string, HostExecutorAgentPolicy>>;
       readonly managerDependencies?: CloudHypervisorManagerDependencies;
@@ -542,6 +545,9 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
         return raceInterruption(snapshotPromise);
       });
       const createdSnapshot = snapshot;
+      if (!('rootfsPath' in createdSnapshot) || typeof createdSnapshot.rootfsPath !== 'string') {
+        throw new Error('Enclave invocation rootfs snapshot is missing');
+      }
       await check('snapshot-digest', async () => {
         const snapshotRootfsStat = await raceInterruption(dependencies.lstat(createdSnapshot.rootfsPath));
         if (
@@ -569,12 +575,12 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       if (filesystemState.aborted) throw new Error('Host executor invocation was cancelled');
       const artifacts: CloudHypervisorPreflightResult = {
         ...this.options.preflight,
-        cloudHypervisorBinary: snapshot.cloudHypervisorBinary,
-        virtiofsdBinary: snapshot.virtiofsdBinary,
-        kernelPath: snapshot.kernelPath,
-        rootfsPath: snapshot.rootfsPath,
-        supervisorPath: snapshot.supervisorPath,
-        artifactSnapshotDirectory: snapshot.directory,
+        cloudHypervisorBinary: createdSnapshot.cloudHypervisorBinary,
+        virtiofsdBinary: createdSnapshot.virtiofsdBinary,
+        kernelPath: createdSnapshot.kernelPath,
+        rootfsPath: createdSnapshot.rootfsPath,
+        supervisorPath: createdSnapshot.supervisorPath,
+        artifactSnapshotDirectory: createdSnapshot.directory,
         artifactDigests: {
           ...this.options.preflight.artifactDigests,
           rootfs: verifiedRootfs.artifact.sha256,

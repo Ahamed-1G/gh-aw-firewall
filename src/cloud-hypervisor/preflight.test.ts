@@ -4,19 +4,26 @@ import { promises as fs } from 'fs';
 import execa from 'execa';
 import * as os from 'os';
 import * as path from 'path';
+import type { WrapperConfig } from '../types';
 import type { CloudHypervisorOptions } from '../types/runtime-options';
+import { normalizeEnclavesConfig } from '../parsers/enclave-parser';
+import {
+  assertEnclaveStartupChecklistComplete, getEnclaveStartupProgress, updateEnclaveStartupProgress,
+} from '../enclave/startup-progress';
 import { CLOUD_HYPERVISOR_ARTIFACT_RELEASE_TAG } from './artifact-manifest';
 import { CloudHypervisorUnsupportedHostError } from './errors';
 import { CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT } from './manager-types';
 import {
   HostPreflightReporter, type HostPreflightProgress, type HostPreflightCheck,
 } from './host-preflight-progress';
+import { schema } from './host-preflight-schema';
 import {
   calculateSha256,
   cloudHypervisorPreflightTestHelpers,
   parseCloudHypervisorVersion,
   parseVirtiofsdVersion,
   runCloudHypervisorPreflight,
+  runCloudHypervisorCommonPreflight,
   VIRTIOFSD_RELEASE_VERSION,
   type CloudHypervisorPreflightDependencies,
 } from './preflight';
@@ -97,6 +104,15 @@ function dependencies(
         ? { bundlePath: '/snapshot/manifest.sigstore.jsonl' }
         : {}),
     })),
+    createCommonArtifactSnapshot: jest.fn(async (sources) => ({
+      directory: `${CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT}/run-common`,
+      cloudHypervisorBinary: '/snapshot/cloud-hypervisor',
+      virtiofsdBinary: '/snapshot/virtiofsd',
+      kernelPath: '/snapshot/vmlinux.bin',
+      supervisorPath: '/snapshot/awf-supervisor',
+      ...(sources.manifestPath ? { manifestPath: '/snapshot/manifest.json' } : {}),
+      ...(sources.bundlePath ? { bundlePath: '/snapshot/manifest.sigstore.jsonl' } : {}),
+    })),
     copySparseFile: jest.fn().mockResolvedValue(undefined),
     removeArtifactSnapshot: jest.fn().mockResolvedValue(undefined),
     verifyManifestAttestation: jest.fn().mockResolvedValue(undefined),
@@ -109,6 +125,116 @@ function dependencies(
 }
 
 describe('Cloud Hypervisor preflight (foundation only)', () => {
+  it.each(['common', 'primary'] as const)('completes readiness after successful %s preflight', async (profile) => {
+    const wrapper = { enclaves: normalizeEnclavesConfig([{ script: {}, repos: [] }]) } as WrapperConfig;
+    const publish = (hostPreflight: HostPreflightProgress) =>
+      updateEnclaveStartupProgress(wrapper, { hostPreflight });
+    const report = new HostPreflightReporter('bounded-runtime', publish);
+    const deps = dependencies({ hostPreflightReporter: report });
+    if (profile === 'common') {
+      await runCloudHypervisorCommonPreflight(config({ rootfsPath: undefined }), deps);
+    } else {
+      await runCloudHypervisorPreflight(config(), deps);
+    }
+    for (const id of ['rootfs-trust', 'rootfs-digest']) {
+      expect(getEnclaveStartupProgress(wrapper)?.startupChecks?.checks[`bounded-runtime/${id}`])
+        .toEqual([profile === 'common' ? 'not-required' : 'passed', 'none']);
+    }
+    expect(deps.sha256).toHaveBeenCalledTimes(profile === 'common' ? 4 : 5);
+
+    // These gates belong to the bounded-storage wrapper or the mocked host probes.
+    for (const id of [
+      'configured-role', 'tool-mount', 'tool-umount', 'invocation-root', 'invocation-parent',
+      'resource-journal', 'storage-allocation', 'storage-ancestor', 'storage-parent', 'storage-root',
+      'storage-tmpfs', 'storage-propagation-set', 'storage-propagation', 'storage-layout',
+      'storage-artifact-mount', 'storage-run-mounts', 'invocation-directory', 'invocation-mount',
+      'storage-verification', 'snapshot-journal', 'root', 'ipv4-control', 'ipv6-control',
+      'seccomp-control', 'cgroup-v2', 'docker-info', 'docker-compose',
+    ] as const) {
+      report.checkSync(id, () => undefined);
+    }
+    const startup = new HostPreflightReporter('startup', publish);
+    for (const id of Object.keys(schema.scopes.startup) as HostPreflightCheck[]) {
+      if (id !== 'readiness') startup.checkSync(id, () => undefined);
+    }
+    startup.checkSync('readiness', () => assertEnclaveStartupChecklistComplete(wrapper, true));
+    expect(() => assertEnclaveStartupChecklistComplete(wrapper)).not.toThrow();
+    expect(getEnclaveStartupProgress(wrapper)?.startupChecks?.ready).toBe(true);
+  });
+
+  it('attests common artifacts without trusting, staging, or hashing the primary rootfs or SBOM', async () => {
+    const checked: string[] = [];
+    const deps = dependencies();
+    const originalLstat = deps.lstat!;
+    deps.lstat = jest.fn(async (file) => {
+      checked.push(file);
+      if (file.includes('rootfs')) throw new Error('primary rootfs must not be checked');
+      return originalLstat(file);
+    });
+    const result = await runCloudHypervisorCommonPreflight(config({ rootfsPath: undefined }), deps);
+    expect(result).not.toHaveProperty('rootfsPath');
+    expect(result.artifactDigests).not.toHaveProperty('rootfs');
+    expect(deps.createArtifactSnapshot).not.toHaveBeenCalled();
+    expect(deps.createCommonArtifactSnapshot).toHaveBeenCalledWith(
+      expect.not.objectContaining({ rootfsPath: expect.anything(), rootfsSbomPath: expect.anything() }),
+      expect.any(Function),
+    );
+    expect(checked.some((file) => file.includes('rootfs'))).toBe(false);
+    expect(deps.verifyManifestAttestation).toHaveBeenCalledWith(
+      '/usr/bin/gh', '/snapshot/manifest.json', '/snapshot/manifest.sigstore.jsonl',
+    );
+  });
+
+  it('fails closed on a common artifact digest mismatch and removes its snapshot', async () => {
+    const deps = dependencies({
+      sha256: jest.fn(async (file) => file.includes('vmlinux') ? 'f'.repeat(64) : digest),
+    });
+    await expect(runCloudHypervisorCommonPreflight(config({ rootfsPath: undefined }), deps))
+      .rejects.toThrow(/guest kernel.*SHA-256 mismatch/);
+    expect(deps.removeArtifactSnapshot).toHaveBeenCalledWith(
+      `${CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT}/run-common`,
+    );
+  });
+
+  it.each([
+    {
+      failure: 'attestation',
+      override: { verifyManifestAttestation: async () => { throw new Error('attestation rejected'); } },
+      message: /attestation rejected/,
+    },
+    {
+      failure: 'version',
+      override: { runVersion: async () => 'v52.0' },
+      message: /pinned to v53.0/,
+    },
+    {
+      failure: 'host',
+      override: { platform: 'darwin' as const },
+      message: /requires Linux with KVM/,
+    },
+  ])('fails closed when common $failure validation fails', async ({ override, message }) => {
+    const deps = dependencies(override);
+    await expect(runCloudHypervisorCommonPreflight(config({ rootfsPath: undefined }), deps))
+      .rejects.toThrow(message);
+    expect(deps.removeArtifactSnapshot).toHaveBeenCalledWith(
+      `${CLOUD_HYPERVISOR_ARTIFACT_SNAPSHOT_ROOT}/run-common`,
+    );
+  });
+
+  it('rejects unattested enclave common preflight even when the development bypass is configured', async () => {
+    const publish = jest.fn();
+    const deps = dependencies({
+      hostPreflightReporter: new HostPreflightReporter('bounded-runtime', publish),
+    });
+    await expect(runCloudHypervisorCommonPreflight(config({
+      rootfsPath: undefined, developmentAllowUnattestedArtifacts: true,
+    }), deps)).rejects.toThrow(/attested primary manifest/);
+    const progress: HostPreflightProgress = publish.mock.lastCall[0];
+    expect(progress.checks.filter((check) => check.result === 'failed')).toEqual([
+      { id: 'artifact-configuration', result: 'failed', reason: 'unknown' },
+    ]);
+    expect(deps.createCommonArtifactSnapshot).not.toHaveBeenCalled();
+  });
   let originalPath: string | undefined;
 
   beforeEach(() => {

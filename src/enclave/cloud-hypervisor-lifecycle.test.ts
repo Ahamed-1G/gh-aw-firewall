@@ -311,6 +311,17 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it('releases bounded storage after failed backend startup when recovery is complete', async () => {
+    start.mockRejectedValueOnce(new Error('artifact preflight failed'));
+    await expect(startCloudHypervisorEnclaveLifecycle(config, provider, {}))
+      .rejects.toThrow('artifact preflight failed');
+    await expect(assertCloudHypervisorEnclaveLifecycleReady(config)).rejects.toThrow(/full preflight/);
+    expect(storage.close).not.toHaveBeenCalled();
+    await expect(stopCloudHypervisorEnclaveLifecycle(config)).rejects.toThrow(/startup failed/);
+    expect(storage.close).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(resolveEnclavePaths(workDir).seedMapPath)).toBe(true);
+  });
+
   it('drains admissions before cancelling the backend, then releases bounded storage', async () => {
     await startCloudHypervisorEnclaveLifecycle(config, provider, {});
     closeCloudHypervisorEnclaveAdmissions(config);
@@ -542,7 +553,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     start.mockRejectedValueOnce(new Error('artifact preflight failed'));
     await expect(startCloudHypervisorEnclaveLifecycle(config, provider, {})).rejects.toThrow(/artifact preflight/);
     await expect(stopCloudHypervisorEnclaveLifecycle(config)).rejects.toThrow(/startup failed/);
-    expect(storage.close).not.toHaveBeenCalled();
+    expect(storage.close).toHaveBeenCalledTimes(1);
     const other = { ...config, workDir: path.join(workDir, 'restarted') };
     const paths = resolveEnclavePaths(other.workDir);
     fs.mkdirSync(paths.root, { recursive: true });
