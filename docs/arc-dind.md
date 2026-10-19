@@ -235,13 +235,25 @@ are tracked there for compiler/MCP Gateway fixes, with AWF-side tracking in
   AWF does not create cross-root symlinks or copies, which can conflict with
   artifact consolidation.
 - **Threat detection:** mounting the input directory only makes it visible to
-  the process. The compiler must also pass that directory in Copilot's
-  `--add-dir` scope. Detection must fail closed if required inputs cannot be
-  read or no valid verdict is produced; a successful engine exit alone is not
-  proof that inputs were analyzed. AWF passes the command through unchanged
-  and cannot interpret an engine's permission denials or detection verdict.
+  the process. `threat-detect` launches Copilot and must grant its input
+  directory in Copilot's `--add-dir` scope; the absence of `--add-dir` in the
+  compiled detection job alone does not show what the subprocess received.
+  Detection must fail closed if required inputs cannot be read or no valid
+  verdict is produced; a successful engine exit alone is not proof that inputs
+  were analyzed. AWF passes the command through unchanged and cannot interpret
+  an engine's permission denials or detection verdict.
   The upstream `Conclude threat detection` step must also honor
   `RUN_DETECTION=false` rather than requiring a deliberately skipped binary.
+  To verify the reported strict-mode failure, reproduce on a throwaway PR
+  with `CUSTOM_PROMPT` removed and other detection settings unchanged. Keep a
+  redacted, non-payload-bearing record of the workflow commit, executed lock
+  excerpt and full setup SHA, compiler/AWF/threat-detect pins, permission
+  errors, non-secret conclusion environment, conclusion/reason/success outputs
+  (mark unset outputs), exit status, and run/job IDs. Compare that old-version
+  result separately from a current-version run: a required unreadable input
+  must not yield a successful verdict in strict mode, while readable inputs
+  must still produce a normal verdict. Neither a mount assertion nor the
+  engine exit status establishes those end-to-end properties.
 - **Safe outputs (findings 3–4):** the gateway's runner UID/GID does not
   establish the identity of its nested `safeoutputs` stdio container. That
   container is launched by MCP Gateway, not AWF; AWF's agent UID/GID mapping
