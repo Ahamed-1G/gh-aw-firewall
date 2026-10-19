@@ -8,8 +8,6 @@ import { createLocalSourceResolver } from './mount-topology';
 import { ensureNestedMountpoints } from './nested-mountpoints';
 import { buildDockerSocketMount } from './docker-socket';
 import { buildEtcMounts } from './etc-mounts';
-import { isSysrootEnabled } from '../sysroot-service';
-import { GEMINI_CLI_SYSTEM_SETTINGS_PATH, getGeminiSystemSettingsSourcePath, isGeminiProxyRoutingEnabled, shouldPinGeminiAuthType } from '../credentials/gemini-cli-settings';
 import { buildHomeMounts } from './home-strategy';
 import { generateHostsFileMount } from './hosts-file';
 import { buildSslMounts } from './ssl-mounts';
@@ -17,6 +15,7 @@ import { buildSystemMounts } from './system-mounts';
 import { buildCustomVolumeMounts, buildWorkspaceMounts } from './workspace-mounts';
 import { applyFilesystemWritePolicy, resolveComposeFilesystemAllowWrite } from './filesystem-write-policy';
 import type { LocalSourceResolver } from './mount-topology';
+import type { NestedMountpointOptions } from './nested-mountpoints';
 
 interface AgentVolumesParams {
   config: WrapperConfig;
@@ -34,7 +33,10 @@ interface AgentVolumesParams {
     uid: number,
     gid: number,
     localSourceResolver: LocalSourceResolver,
+    options?: NestedMountpointOptions,
   ) => string[];
+  additionalMounts?: string[];
+  nestedMountpointOptions?: NestedMountpointOptions;
 }
 
 export function buildAgentVolumes(params: AgentVolumesParams): string[] {
@@ -51,6 +53,7 @@ export function buildAgentVolumes(params: AgentVolumesParams): string[] {
   } = params;
 
   const agentVolumes: string[] = [];
+  agentVolumes.push(...(params.additionalMounts ?? []));
   agentVolumes.push(...buildWorkspaceMounts({
     config,
     projectRoot,
@@ -69,9 +72,6 @@ export function buildAgentVolumes(params: AgentVolumesParams): string[] {
     config, effectiveHome, agentLogsPath, sessionStatePath, pathExists: params.pathExists,
   }));
   agentVolumes.push(...buildEtcMounts(config, params.pathExists));
-  if (process.getuid?.() === 0 && !isSysrootEnabled(config) && isGeminiProxyRoutingEnabled(config) && shouldPinGeminiAuthType(config)) {
-    agentVolumes.push(`${getGeminiSystemSettingsSourcePath(config.workDir)}:/host${GEMINI_CLI_SYSTEM_SETTINGS_PATH}:ro`);
-  }
   // When sysroot-stage is active, the sysroot volume provides /etc/hosts.
   // The generated chroot hosts file lives on the runner's /tmp which the
   // Docker daemon cannot see on split-fs. DNS pre-resolution is skipped;
@@ -123,6 +123,7 @@ export function buildAgentVolumes(params: AgentVolumesParams): string[] {
     parseInt(getSafeHostUid(), 10),
     parseInt(getSafeHostGid(), 10),
     localSourceResolver,
+    params.nestedMountpointOptions,
   );
 
   if (config.dockerHostPathPrefix) {

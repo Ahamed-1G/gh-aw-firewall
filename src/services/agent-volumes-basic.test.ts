@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import type { WrapperConfig } from '../types';
 import { generateDockerCompose, mockNetworkConfig, useAgentVolumesTestConfig } from './service-test-setup.test-utils';
-import { GEMINI_CLI_SYSTEM_SETTINGS_PATH, getGeminiSystemSettingsSourcePath } from './credentials/gemini-cli-settings';
+import { GEMINI_SETTINGS_MOUNT, GEMINI_SETTINGS_SERVICE } from './gemini-settings-service';
+import { getGeminiSystemSettingsPath } from './credentials/gemini-cli-settings';
 
 // Create mock functions (must remain per-file — jest.mock() is hoisted before imports)
 
@@ -12,34 +13,29 @@ const { getConfig } = useAgentVolumesTestConfig();
 
 describe('agent service', () => {
   it.each([undefined, '/host', '/tmp/gh-aw'])(
-    'mounts the Gemini auth pin read-only under /etc with prefix %s',
+    'mounts the Gemini auth pin from its named volume with prefix %s',
     (dockerHostPathPrefix) => {
-      const rootSpy = jest.spyOn(process, 'getuid').mockReturnValue(0);
-      try {
-        const config = {
-          ...getConfig(), enableApiProxy: true, geminiApiKey: 'fake-key', dockerHostPathPrefix,
-        };
-        const volumes = generateDockerCompose(config, mockNetworkConfig).services.agent.volumes as string[];
-        const source = getGeminiSystemSettingsSourcePath(config.workDir);
-        const translated = dockerHostPathPrefix ? `${dockerHostPathPrefix}${source}` : source;
-        expect(volumes).toContain(`${translated}:/host${GEMINI_CLI_SYSTEM_SETTINGS_PATH}:ro`);
-        expect(volumes.some((volume) => volume.includes(':/host/home/') && volume.includes('settings.json'))).toBe(false);
-      } finally {
-        rootSpy.mockRestore();
-      }
+      const config = {
+        ...getConfig(), enableApiProxy: true, geminiApiKey: 'fake-key', dockerHostPathPrefix,
+      };
+      const compose = generateDockerCompose(config, mockNetworkConfig);
+      const volumes = compose.services.agent.volumes as string[];
+      expect(volumes).toContain(GEMINI_SETTINGS_MOUNT);
+      expect(compose.services[GEMINI_SETTINGS_SERVICE]).toBeDefined();
+      expect(volumes.some((volume) => volume.includes(':/host/home/') && volume.includes('settings.json'))).toBe(false);
     },
   );
 
-  it('uses privileged entrypoint staging instead of a host bind for non-root Compose', () => {
+  it('uses the daemon-local named volume for non-root Compose', () => {
     const nonRootSpy = jest.spyOn(process, 'getuid').mockReturnValue(1001);
     try {
       const compose = generateDockerCompose({
         ...getConfig(), enableApiProxy: true, geminiApiKey: 'fake-key', networkIsolation: true,
       }, { ...mockNetworkConfig, proxyIp: '172.30.0.30' });
       const volumes = compose.services.agent.volumes as string[];
-      expect(volumes.some((volume) => volume.includes(`:/host${GEMINI_CLI_SYSTEM_SETTINGS_PATH}:`))).toBe(false);
-      expect(compose.services.agent.environment?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(GEMINI_CLI_SYSTEM_SETTINGS_PATH);
-      expect(compose.services.agent.environment?.AWF_GEMINI_SYSTEM_SETTINGS_FALLBACK).toBe('1');
+      expect(volumes).toContain(GEMINI_SETTINGS_MOUNT);
+      expect(compose.services.agent.environment?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(getGeminiSystemSettingsPath());
+      expect(compose.services.agent.environment?.AWF_GEMINI_SYSTEM_SETTINGS_FALLBACK).toBeUndefined();
     } finally {
       nonRootSpy.mockRestore();
     }
@@ -53,7 +49,7 @@ describe('agent service', () => {
   ])('omits the system settings mount when pinning is disabled: %j', (overrides) => {
     const volumes = generateDockerCompose({ ...getConfig(), ...overrides }, mockNetworkConfig)
       .services.agent.volumes as string[];
-    expect(volumes.some((volume) => volume.includes(`:/host${GEMINI_CLI_SYSTEM_SETTINGS_PATH}:`))).toBe(false);
+    expect(volumes).not.toContain(GEMINI_SETTINGS_MOUNT);
   });
 
   it('should mount required volumes in agent container (default behavior)', () => {

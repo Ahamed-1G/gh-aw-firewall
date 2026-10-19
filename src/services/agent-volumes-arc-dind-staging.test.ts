@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { stageHostFile } from './agent-volumes/docker-host-staging';
 import { applyHostPathPrefixToVolumes } from './host-path-prefix';
-import { GEMINI_CLI_SYSTEM_SETTINGS_PATH } from './credentials/gemini-cli-settings';
+import { GEMINI_SETTINGS_MOUNT, GEMINI_SETTINGS_SERVICE } from './gemini-settings-service';
 
 // Create mock functions (must remain per-file — jest.mock() is hoisted before imports)
 
@@ -23,11 +23,10 @@ describe('agent service', () => {
     const compose = generateDockerCompose(config, { ...mockNetworkConfig, proxyIp: '172.30.0.30' });
     const volumes = compose.services.agent.volumes as string[];
     expect(volumes).toContain('sysroot:/host:rw');
-    expect(volumes.some((volume) => volume.includes(`:/host${GEMINI_CLI_SYSTEM_SETTINGS_PATH}:`))).toBe(false);
-    expect(compose.services.agent.environment?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(GEMINI_CLI_SYSTEM_SETTINGS_PATH);
+    expect(volumes).toContain(GEMINI_SETTINGS_MOUNT);
+    expect(compose.services.agent.environment?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe('/etc/awf/gemini-cli/settings.json');
     expect(compose.services.agent.environment?.AWF_GEMINI_SYSTEM_SETTINGS_FALLBACK).toBeUndefined();
-    expect(compose.services['sysroot-stage']?.command?.[0])
-      .toContain(`> /sysroot${GEMINI_CLI_SYSTEM_SETTINGS_PATH}`);
+    expect(compose.services[GEMINI_SETTINGS_SERVICE]).toBeDefined();
   });
 
   it.each(['/host', '/tmp/gh-aw', '/tmp'])(

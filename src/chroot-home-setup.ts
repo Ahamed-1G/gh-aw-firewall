@@ -3,16 +3,9 @@ import * as path from 'path';
 import { WrapperConfig } from './types';
 import { logger } from './logger';
 import { getSafeHostUid, getSafeHostGid, getRealUserHome } from './host-env';
-import { assertRealDirectory, createMissingOwnedDirectorySegments, writeFileNoFollow } from './fs-utils';
+import { assertRealDirectory, createMissingOwnedDirectorySegments } from './fs-utils';
 import { resolveRunnerToolCachePath } from './runner-tool-cache';
 import { HOME_TOOL_PATHS } from './config/mount-policy';
-import { isSysrootEnabled } from './services/sysroot-service';
-import {
-  getGeminiSystemSettingsSourcePath,
-  buildGeminiSystemSettingsContent,
-  isGeminiProxyRoutingEnabled,
-  shouldPinGeminiAuthType,
-} from './services/credentials/gemini-cli-settings';
 
 // Prepare a nested bind-mount destination inside the empty chroot home before
 // Docker sees it. Without this, Docker may create intermediate parents such as
@@ -39,31 +32,6 @@ export function prepareChrootHomeMountpoint(emptyHomeDir: string, relativeMountP
   }
 
   return chrootPath;
-}
-
-/**
- * Writes the AWF-owned Gemini CLI system settings file into a private staging directory,
- * pinning the CLI's auth type so that AWF's `GOOGLE_GEMINI_BASE_URL` (api-proxy
- * routing) is not misread as unsupported "gateway" auth. Only the root-owned
- * file is mounted read-only under /etc in the agent; host Gemini settings are untouched.
- */
-function writeGeminiSystemSettings(workDir: string): void {
-  const settingsPath = getGeminiSystemSettingsSourcePath(workDir);
-  const settingsDir = path.dirname(settingsPath);
-
-  fs.mkdirSync(settingsDir, { recursive: true, mode: 0o700 });
-  assertRealDirectory(settingsDir);
-  fs.chownSync(settingsDir, 0, 0);
-  fs.chmodSync(settingsDir, 0o700);
-
-  writeFileNoFollow(settingsPath, buildGeminiSystemSettingsContent(), 0o644, { uid: 0, gid: 0 });
-  logger.debug(`Wrote Gemini CLI system settings: ${settingsPath} (0:0)`);
-}
-
-export function prepareGeminiSystemSettings(config: WrapperConfig): void {
-  if (process.getuid?.() === 0 && !isSysrootEnabled(config) && isGeminiProxyRoutingEnabled(config) && shouldPinGeminiAuthType(config)) {
-    writeGeminiSystemSettings(config.workDir);
-  }
 }
 
 /**
