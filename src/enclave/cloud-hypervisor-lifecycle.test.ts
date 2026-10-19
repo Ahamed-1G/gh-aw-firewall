@@ -641,7 +641,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
   it('preserves recovery records even when backend close resolves with pending resources', async () => {
     await startCloudHypervisorEnclaveLifecycle(config, provider, {});
     const paths = resolveEnclavePaths(workDir);
-    fs.mkdirSync(paths.hostExecutorJournalDir);
+    fs.mkdirSync(paths.hostExecutorJournalDir, { mode: 0o700 });
     fs.writeFileSync(path.join(paths.hostExecutorJournalDir, `${runId}-${'b'.repeat(32)}.resources.json`),
       JSON.stringify({ runId, state: 'pending' }), { mode: 0o600 });
     await expect(stopCloudHypervisorEnclaveLifecycle(config)).rejects.toThrow(/cleanup is uncertain/);
@@ -651,7 +651,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
   it('preserves cleanup-pending invocation tombstones even if the listener closes normally', async () => {
     await startCloudHypervisorEnclaveLifecycle(config, provider, {});
     const paths = resolveEnclavePaths(workDir);
-    fs.mkdirSync(paths.hostExecutorJournalDir);
+    fs.mkdirSync(paths.hostExecutorJournalDir, { mode: 0o700 });
     fs.writeFileSync(path.join(paths.hostExecutorJournalDir, `${runId}.journal`),
       '{"state":"cleanup-pending"}\n{"state":"closed"}\n', { mode: 0o600 });
     await expect(stopCloudHypervisorEnclaveLifecycle(config)).rejects.toThrow(/cleanup is uncertain/);
@@ -663,7 +663,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     const paths = resolveEnclavePaths(workDir);
     expect(resolveEnclavePaths(path.join(workDir, 'another-workdir')).hostExecutorJournalDir)
       .toBe(paths.hostExecutorJournalDir);
-    fs.mkdirSync(paths.hostExecutorJournalDir);
+    fs.mkdirSync(paths.hostExecutorJournalDir, { mode: 0o700 });
     const currentJournal = path.join(paths.hostExecutorJournalDir, `${runId}.journal`);
     fs.writeFileSync(currentJournal, '{"state":"closed"}\n', { mode: 0o600 });
     fs.writeFileSync(path.join(paths.hostExecutorJournalDir, `${runId}-${'b'.repeat(32)}.resources.json`),
@@ -686,7 +686,7 @@ describe('trusted Cloud Hypervisor enclave lifecycle', () => {
     const paths = resolveEnclavePaths(other.workDir);
     fs.mkdirSync(paths.root, { recursive: true });
     fs.writeFileSync(paths.runIdPath, 'c'.repeat(32));
-    fs.mkdirSync(paths.hostExecutorJournalDir, { recursive: true });
+    fs.mkdirSync(paths.hostExecutorJournalDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(paths.hostExecutorJournalDir, `${'c'.repeat(32)}.journal`),
       '{"state":"open"}\n', { mode: 0o600 });
     await expect(stopCloudHypervisorEnclaveLifecycle(other)).rejects.toThrow(/trusted reconciliation/);
