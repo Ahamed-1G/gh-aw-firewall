@@ -907,6 +907,51 @@ from issues 10029 and 10030 land first, the tests characterize the corrected
 baseline. Otherwise the tests mark those cases as known gaps to close through
 the catalogue.
 
+Gate 1 handoff (baseline on this branch; these are observations, not the
+target contract):
+
+- `src/copilot-model.test.ts` freezes host exact allowlist validation,
+  separator/case equivalence, retired replacement, and rejection of prefixes,
+  dates, queries, family variants, and specialized variants.
+  `src/copilot-model-catalog-sync.test.ts` inventories supported, curated-priced,
+  fallback-priced, mapped, and explicitly excluded families; it fails with both
+  mapping-copy paths if the documentation and packaged bytes diverge.
+- Proxy characterization lives in
+  `containers/api-proxy/model-metadata-characterization.test.js`, alongside
+  existing model resolver, mapping, routing, policy, reflection, discovery,
+  and AI-credit guard tests. Host validation does not strip provider prefixes
+  or date suffixes; the proxy strips a matching provider prefix, runtime
+  pricing strips date suffixes and lowercases, operator overlays keep date
+  suffixes and match families, and `models.dev` strips dates but preserves
+  case. The proxy retirement guard only lowercases, so it blocks
+  `GPT-5-CODEX` but not `GPT_5_CODEX`; host validation normalizes separators and
+  rejects both. Dated operator-overlay fixtures distinguish the exact dated
+  tariff from the base tariff selected for another date. These differences must
+  be compared before Gate 2 changes identity.
+- Pricing precedence to preserve in Gate 3/5 is operator overlay, configured
+  shared pricing catalogue, complete runtime price, incomplete runtime price
+  with lower-priority components, curated price, bundled `models.dev`,
+  dynamic-selector conservative price, configured default, then built-in
+  unknown-model fallback (only for the `unknown` sentinel). Compare selected
+  tier, tariff, source, and accounting/reflection fields, not only a model ID.
+- Known gaps: #10029 is not fully landed: six proposed models are absent from
+  the host allowlist and four from curated pricing (`gemini-3.8-flash` and
+  `grok-4.5`/`4.6`/`4.7`). `claude-opus-5.5`, `claude-sonnet-5.5`, and
+  `gpt-6.1-sol` already have curated entries. Four entries still appear in the
+  stale `SUPPORTED_WITHOUT_CURATED_PRICING` exception set. #10030 is not landed:
+  `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6` (including Sol, Terra, and Luna),
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, and `gpt-6.1-sol` lack mapping
+  routing metadata, as does the `claude-haiku-5` family. The mapping currently
+  omits `xhigh` for Claude Opus 5/5.5, Sonnet 5/5.5, and Opus 4.7/4.8. The
+  named host and proxy tests inventory these gaps; replace their expectations
+  when the fixes land rather than treating absence as the future specification.
+- Validation: run `npm run build && npx jest --runInBand
+  src/copilot-model.test.ts src/copilot-model-catalog-sync.test.ts` from the
+  repository root, and `npm test -- --runInBand
+  model-metadata-characterization.test.js` from `containers/api-proxy`.
+  These are separate Jest configurations. All reflection fixtures use
+  `/reflect`, not a new endpoint.
+
 ### Gate 2: Schema and identity
 
 Land the canonical, overlay, and snapshot schemas plus one provider-qualified
