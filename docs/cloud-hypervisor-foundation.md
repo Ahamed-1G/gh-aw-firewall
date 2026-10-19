@@ -171,10 +171,21 @@ record is removed while the requested resources remain preserved.
 
 ### Public-fixture enclave debugging
 
-Enclave raw stdout/stderr is discarded by default. For **public test fixtures
-only**, add `--cloud-hypervisor-enclave-debug-public` to the trusted host AWF
-invocation, or set this top-level configuration alongside the existing enclave
-and attested Cloud Hypervisor configuration:
+For attested, static **public-only** Cloud Hypervisor enclaves, AWF retains logs
+by default. This includes script stdout/stderr, VM diagnostics, and the agent's
+bounded `enclave-session.log`: Copilot stdout/stderr and failure diagnostics
+captured by the guest entrypoint, with credential redaction. It is captured
+after confirmed VM stop, before invocation storage is removed, including failed
+invocations. The session is limited to 1 MiB and never included in the ordinary
+audit projection. A failed protected write prevents removal of the source
+storage and reports incomplete cleanup.
+
+Private, mixed-sensitivity, dynamic, custom-image, development, and other-runtime
+configurations retain their existing default-discard behavior. Set
+`cloudHypervisor.enclaveDebugPublic: false` to opt out, or explicitly request
+public-only retention with `--cloud-hypervisor-enclave-debug-public` or this
+top-level configuration alongside the existing enclave and attested
+Cloud Hypervisor configuration:
 
 ```json
 {
@@ -185,7 +196,7 @@ and attested Cloud Hypervisor configuration:
 }
 ```
 
-This opt-in does not open any production rollout gate or enable a different
+Retention does not open any production rollout gate or enable a different
 runtime. Every configured repository must have `sensitivity: "public"`. AWF also
 checks GitHub's repository metadata **without credentials**, rejects redirects,
 and requires matching repository identity, `private: false`, and
@@ -198,7 +209,7 @@ Failures report a bounded reason (`http-status`, `missing-body`, `timeout`,
 transport codes. Response bodies, headers, repository names, and raw transport
 errors are not included. A `403` alone does not establish rate limiting, and
 an unknown transport code must not be treated as a diagnosed network cause.
-Dynamic repository admission, non-public sensitivities (including `trusted`),
+Explicit requests for dynamic repository admission, non-public sensitivities (including `trusted`),
 custom enclave images, unattested development artifacts, and non-Cloud-Hypervisor
 executors are rejected. A guest request, payload, or environment variable cannot
 enable capture.
@@ -212,6 +223,13 @@ chain and artifacts are root-owned; directories are `0700`, regular single-link
 files are `0600`, and symlink destinations are rejected. They are **not** copied into ordinary
 audit/log collections or widened for upload. Inspect them on the host and remove
 the specific invocation directory when no longer needed.
+
+The public-fixture smoke collector includes `enclave-session.log` in its bounded,
+short-lived debug artifact. Dedicated proxy accounting remains a separate
+closed projection of request/status and token totals, not raw HTTP bodies,
+headers, or credentials. Public repository visibility is not a guarantee that
+every log line is safe to publish; host-only retention is not automatic upload
+authorization.
 
 Capture retains the trailing **1 MiB per raw stream/file**, not an unlimited
 transcript: guest stdout/stderr, launcher stdout/stderr, serial/VMM logs, and
@@ -410,6 +428,24 @@ raise these fields. The role budgets are:
 | Host-only rootfs preparation ceiling | 2 GiB | 2 GiB |
 | Host-only final image and VM run-state ceiling | 2 GiB | 2 GiB |
 | Guest UID/GID | 65534:65534 | 65534:65534 |
+
+The validated host profile distinguishes execution `kind` from `artifact`:
+`primary-agent` selects `primary`, while both enclave roles select `enclave`.
+For schema version 2, both enclave roles stage the same verified rootfs digest
+but launch their respective fixed entrypoints. Exact-release version-1 split
+artifacts remain selected by role; version-1 shared layouts retain their shared
+digest checks. The shared filesystem includes both entrypoints and shell tools,
+but neither their presence nor the broker request authorizes an agent launch
+from a script profile. The script still has no NIC or credentials.
+
+`src/cloud-hypervisor/workload-profile.ts` owns the host role entrypoints and
+resource profiles. Deterministic contract assertions in
+`scripts/ci/cloud-hypervisor-enclave-artifacts.test.ts` compare guest identity,
+rlimits, role tmpfs sizes, and build-time entrypoints and identity against
+the host policy; run them with
+`npx jest --runInBand scripts/ci/cloud-hypervisor-enclave-artifacts.test.ts`.
+VM sizing, host CPU quotas, and aggregate writable-storage ceilings are
+separate host-only limits, not guest tmpfs or rlimit settings.
 
 The VM receives exactly the profile's vCPU count and memory. The host cgroup
 applies a matching 50000/100000-µs CPU quota to the VMM and its virtio-fs
@@ -1762,7 +1798,7 @@ For script guests, the entrypoint emits bounded JSON lifecycle records on stderr
 startup identity, seed copy, output link, working-directory setup, and script
 execution, with elapsed time and native error category/errno on failure.
 These do not enter script stdout or the bounded result. Guest streams remain
-discarded by default; the existing public-fixture debug opt-in captures them
+discarded for non-public scopes; verified public-only retention captures them
 in `guest-stderr.raw.log`. They require a rebuilt, release-attested script rootfs.
 Broker and host diagnostics do not require a new guest rootfs and can explain
 failures that occur before the guest starts.

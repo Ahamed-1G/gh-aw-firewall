@@ -165,18 +165,21 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
 
   describe('CloudHypervisorHostEnclaveExecutorBackend', () => {
     it.each([
-      { role: 'script', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false },
-      { role: 'agent', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false },
-      { role: 'script', timeoutMs: 1_000, startupDelayMs: 1_500, expectedOutcome: 'success', publicDebug: false },
-      { role: 'script', timeoutMs: 1_000, startupDelayMs: 2_500, expectedOutcome: 'timeout', publicDebug: false },
-      { role: 'script', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: true },
-      { role: 'agent', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: true },
+      { role: 'script', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false, shared: false },
+      { role: 'agent', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false, shared: false },
+      { role: 'script', timeoutMs: 1_000, startupDelayMs: 1_500, expectedOutcome: 'success', publicDebug: false, shared: false },
+      { role: 'script', timeoutMs: 1_000, startupDelayMs: 2_500, expectedOutcome: 'timeout', publicDebug: false, shared: false },
+      { role: 'script', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: true, shared: false },
+      { role: 'agent', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: true, shared: false },
+      { role: 'script', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false, shared: true },
+      { role: 'agent', timeoutMs: 60_000, startupDelayMs: 0, expectedOutcome: 'success', publicDebug: false, shared: true },
     ] as const)('stages a static $role invocation and enforces its $expectedOutcome deadline', async ({
       role,
       timeoutMs,
       startupDelayMs,
       expectedOutcome,
       publicDebug,
+      shared,
     }) => {
       // Invocation trust rejects /tmp; the home fixture also keeps Unix sockets short.
       const scratch = await fs.mkdtemp(path.join(os.homedir(), '.awf-backend-'));
@@ -258,6 +261,7 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
       const agentArtifact = makeArtifact('agent');
       const artifacts = {
         manifest: {
+          schemaVersion: shared ? 2 : 1,
           release: { tag: 'v0.23.1' },
           rootfs: {
             script: { entrypoint: scriptArtifact.entrypoint },
@@ -310,6 +314,7 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
       let workloadProfile: CloudHypervisorWorkloadProfile | undefined;
       let stagedHandoff: { agentId: string; bearer: string } | undefined;
       const sessionReads: Array<{ stopped: boolean; unmounted: boolean }> = [];
+      const preservePublicSession = jest.fn().mockResolvedValue(undefined);
       const backendOptions = {
         runState,
         config,
@@ -323,12 +328,13 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
         ...(role === 'agent' ? { agentPolicies: { [entryId]: agentPolicy } } : {}),
       };
       const dependencies: Partial<HostEnclaveExecutorDependencies> = {
-        readSessionDiagnostics: async (directory) => {
+        preservePublicSession,
+        readSessionDiagnostics: async (directory, _uid, _gid, retain) => {
           const runtime = path.join(directory, 'runtime');
           const dir = await fs.stat(runtime);
           sessionReads.push({ stopped, unmounted });
           // chown is intentionally mocked in this unprivileged backend fixture.
-          return readEnclaveSessionDiagnostics(directory, dir.uid, dir.gid);
+          return readEnclaveSessionDiagnostics(directory, dir.uid, dir.gid, retain);
         },
         createResourceJournal: async () => ({
           captureDirectory: async () => undefined,
@@ -342,6 +348,9 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
         }),
         createArtifactSnapshot: async (_sources, _copy, onDirectoryCreated) => {
           expect(_sources.supervisorPath).toBe(preflight.supervisorPath);
+          expect(_sources.rootfsPath).toBe(shared
+            ? '/trusted/enclave-script-rootfs.ext4'
+            : `/trusted/enclave-${role}-rootfs.ext4`);
           const directory = path.join(root, `snapshot-${++snapshotNumber}`);
           await fs.mkdir(directory, { mode: 0o700 });
           expect(typeof onDirectoryCreated).toBe('function');
@@ -374,6 +383,7 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           managerBinary = managerConfig.cloudHypervisorBinary;
           workloadProfile = profile;
           expect(profile.guest?.identity).toEqual({ uid: 65534, gid: 65534 });
+          expect(profile.artifact).toBe('enclave');
           expect(profile.rawOutput).toBe(publicDebug ? 'capture' : 'discard');
           if (publicDebug) {
             expect(managerDependencies?.enclaveDebugArtifactDirectory).toMatch(
@@ -396,6 +406,8 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
             startInstance: async () => undefined,
             execute: async (request) => {
               executionRequest = request;
+              expect(request.argv).toEqual([`/usr/local/bin/run-enclave-${role}`]);
+              if (role === 'script') expect(request.env).toEqual({});
               request.onDiagnostics?.({
                 phase: 'sending', elapsedMs: 0, framesReceived: 0, stdoutBytes: 0,
                 stderrBytes: 0, pendingFrameBytes: 0, resultReceived: false,
@@ -501,6 +513,19 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
             AWF_ENCLAVE_AGENT_MAX_MODEL_TOKENS: '1000',
             AWF_ENCLAVE_AGENT_DEADLINE_SECONDS: '61',
           });
+          expect(executionRequest?.env.AWF_ENCLAVE_AGENT_DEBUG_RAW_SESSION_LOGS)
+            .toBe(publicDebug ? 'true' : undefined);
+          if (publicDebug) {
+            expect(preservePublicSession).toHaveBeenCalledWith(
+              expect.stringMatching(/^\/protected\/cloud-hypervisor\/[a-f0-9]+$/),
+              '/protected',
+              expect.stringContaining('PRIVATE_SESSION_TOKEN'),
+              expect.arrayContaining([agentPolicy.githubBearer]),
+              expect.anything(),
+            );
+          } else {
+            expect(preservePublicSession).not.toHaveBeenCalled();
+          }
           expect(executionRequest?.env.COPILOT_API_URL)
             .toBe(`http://${ENCLAVE_AGENT_API_PROXY_IP}:10002`);
           expect(executionRequest?.env).toMatchObject({
@@ -531,6 +556,7 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           });
           expect(failed.milestones).not.toContainEqual(expect.objectContaining({ phase: 'guest-complete' }));
           expect(failed.guestSession).toMatchObject({ status: 'captured' });
+          expect(preservePublicSession).toHaveBeenCalledTimes(publicDebug ? 2 : 0);
           await expect(fs.stat(invocationHostDir)).rejects.toMatchObject({ code: 'ENOENT' });
           managerExecuteError = false;
         } else if (expectedOutcome === 'success') {
@@ -553,6 +579,9 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           await invalidStorageBackend.close();
 
           expect(workloadProfile?.kind).toBe('script-enclave');
+          expect(workloadProfile?.network).toEqual({ mode: 'none' });
+          expect(workloadProfile?.guest?.exports.some(({ tag }) => tag === 'enclave-session-handoff'))
+            .toBe(false);
           if (expectedOutcome === 'success') {
             expect(executionRequest?.argv).toEqual([scriptArtifact.entrypoint]);
             expect(executionRequest?.env).toEqual({});
@@ -650,6 +679,20 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           expect(workloadProfile?.network).not.toHaveProperty('githubDataPlane');
           expect(executionRequest?.env.AWF_ENCLAVE_AGENT_GITHUB_ENABLED).toBe('false');
           await noGithubBackend.close();
+
+          if (publicDebug) {
+            preservePublicSession.mockRejectedValueOnce(new Error('protected session write failed'));
+            stopped = false;
+            unmounted = false;
+            snapshotRemoved = false;
+            await expect(backend.execute(plan, new AbortController().signal))
+              .resolves.toEqual({ outcome: 'executor-failure', cleanupComplete: false });
+            expect(stopped).toBe(true);
+            expect(unmounted).toBe(false);
+            expect(snapshotRemoved).toBe(false);
+            await expect(fs.stat(path.join(invocationHostDir, 'runtime', 'session.jsonl')))
+              .resolves.toBeDefined();
+          }
         } else if (expectedOutcome === 'success') {
           const mountFailureBackend = new CloudHypervisorHostEnclaveExecutorBackend({
             ...backendOptions,
