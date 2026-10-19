@@ -250,6 +250,7 @@ staged the actions**, use a disposable output file (this does not replace the
 end-to-end ARC run):
 
 ```bash
+set -e
 script="${RUNNER_TEMP}/gh-aw/actions/conclude_threat_detection.sh"
 test -f "$script"
 work="$(mktemp -d)"
@@ -263,7 +264,7 @@ grep -Fx 'conclusion=skipped' "$work/skipped"
 grep -Fx 'success=true' "$work/skipped"
 grep -Fx 'reason=' "$work/skipped"
 if GITHUB_OUTPUT="$work/required" RUN_DETECTION=true \
-  THREAT_DETECT_INSTALL_OUTCOME=skipped GH_AW_DETECTION_CONTINUE_ON_ERROR=false \
+  THREAT_DETECT_INSTALL_OUTCOME=success GH_AW_DETECTION_CONTINUE_ON_ERROR=false \
   PATH="$work/bin" /bin/bash "$script" "$work/absent-result.json"; then
   echo "Required detection unexpectedly succeeded" >&2
   exit 1
