@@ -111,6 +111,36 @@ test('invalid and all-distrusted CA stores fail closed', () => {
   }
 });
 
+test('missing, empty, and grep-error distrust policies fail closed', () => {
+  const policyFile = path.join(work, 'distrusted-spki.txt');
+  const policy = fs.readFileSync(policyFile, 'utf8');
+  const output = path.join(work, 'reject-policy');
+  try {
+    fs.unlinkSync(policyFile);
+    expect(() => execFileSync('sh', [path.join(work, 'filter-ca-store.sh'), output,
+      path.join(work, 'inputs.pem')], { stdio: 'pipe' })).toThrow();
+
+    fs.writeFileSync(policyFile, '');
+    expect(() => execFileSync('sh', [path.join(work, 'filter-ca-store.sh'), output,
+      path.join(work, 'inputs.pem')], { stdio: 'pipe' })).toThrow();
+
+    fs.writeFileSync(policyFile, policy);
+    const fakeBin = path.join(work, 'fake-bin');
+    fs.mkdirSync(fakeBin);
+    const fakeGrep = path.join(fakeBin, 'grep');
+    fs.writeFileSync(fakeGrep, '#!/bin/sh\nexit 2\n');
+    fs.chmodSync(fakeGrep, 0o755);
+    expect(() => execFileSync('sh', [path.join(work, 'filter-ca-store.sh'), output,
+      path.join(work, 'inputs.pem')], {
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
+      stdio: 'pipe',
+    })).toThrow();
+    expect(fs.existsSync(path.join(output, 'ca-certificates.crt'))).toBe(false);
+  } finally {
+    fs.writeFileSync(policyFile, policy);
+  }
+});
+
 test.each(['https', 'tls', 'fetch'])('%s rejects compromised default/extra/explicit trust and keeps private CA support', async mode => {
   for (const [leaf, allowed] of [['bad-leaf', false], ['good-leaf', true]] as const) {
     const server = https.createServer({

@@ -4,6 +4,11 @@ set -eu
 output=$1
 shift
 policy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+policy_file="$policy_dir/distrusted-spki.txt"
+[ -f "$policy_file" ] && [ -s "$policy_file" ] && [ -r "$policy_file" ] || {
+    echo "AWF trust policy: missing, empty, or unreadable distrust policy: $policy_file" >&2
+    exit 1
+}
 mkdir -p "$output"
 work=$(mktemp -d "$output/.filter.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
@@ -39,10 +44,22 @@ for cert in "$work"/cert-*.pem; do
     openssl pkey -pubin -in "$work/key.pem" -outform DER -out "$work/key.der"
     openssl dgst -sha256 "$work/key.der" > "$work/digest"
     key=$(awk '{print $NF}' "$work/digest")
-    if grep -Fqx "$key" "$policy_dir/distrusted-spki.txt"; then
-        echo "AWF trust policy: removed distrusted CA key $key" >&2
-        continue
+    if grep -Fqx "$key" "$policy_file"; then
+        grep_status=0
+    else
+        grep_status=$?
     fi
+    case "$grep_status" in
+        0)
+            echo "AWF trust policy: removed distrusted CA key $key" >&2
+            continue
+            ;;
+        1) ;;
+        *)
+            echo "AWF trust policy: failed to read distrust policy: $policy_file" >&2
+            exit 1
+            ;;
+    esac
     openssl x509 -in "$cert" -outform DER -out "$work/cert.der"
     openssl dgst -sha256 "$work/cert.der" > "$work/digest"
     fingerprint=$(awk '{print $NF}' "$work/digest")
