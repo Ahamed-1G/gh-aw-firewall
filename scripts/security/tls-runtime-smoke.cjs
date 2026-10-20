@@ -58,17 +58,31 @@ test('HTTPS, direct TLS and fetch enforce default, extra and explicit CA distrus
         for (const explicit of [false, true]) {
           const allowed = name === 'private-awf';
           const script = `
-            const options={host:'127.0.0.1',port:${port},servername:'localhost',
-              ${explicit ? `ca:require('fs').readFileSync(${JSON.stringify(path.join(work, 'inputs.pem'))}),` : ''}};
-            const fail=()=>process.exit(${allowed ? 1 : 0}), pass=()=>process.exit(${allowed ? 0 : 1});
-            if (${JSON.stringify(mode)}==='tls') require('tls').connect(options,pass).on('error',fail);
-            else if (${JSON.stringify(mode)}==='fetch') fetch('https://localhost:${port}').then(pass,fail);
-            else require('https').get(options,pass).on('error',fail);
-            setTimeout(()=>process.exit(2),5000).unref();
+            const fs = require('fs');
+            const mode = process.env.AWF_MODE;
+            const port = Number(process.env.AWF_PORT);
+            const explicit = process.env.AWF_EXPLICIT === '1';
+            const allowed = process.env.AWF_ALLOWED === '1';
+            const options = { host: '127.0.0.1', port, servername: 'localhost' };
+            if (explicit) options.ca = fs.readFileSync(process.env.AWF_INPUTS_PEM);
+            const fail = () => process.exit(allowed ? 1 : 0);
+            const pass = () => process.exit(allowed ? 0 : 1);
+            if (mode === 'tls') require('tls').connect(options, pass).on('error', fail);
+            else if (mode === 'fetch') fetch('https://localhost:' + port).then(pass, fail);
+            else require('https').get(options, pass).on('error', fail);
+            setTimeout(() => process.exit(2), 5000).unref();
           `;
           const code = await new Promise((resolve, reject) => {
             const child = spawn(process.execPath, ['--require', path.join(work, 'policy.cjs'), '-e', script], {
-              env: { ...process.env, NODE_EXTRA_CA_CERTS: path.join(work, 'inputs.pem') },
+              env: {
+                ...process.env,
+                NODE_EXTRA_CA_CERTS: path.join(work, 'inputs.pem'),
+                AWF_MODE: mode,
+                AWF_PORT: String(port),
+                AWF_EXPLICIT: explicit ? '1' : '0',
+                AWF_ALLOWED: allowed ? '1' : '0',
+                AWF_INPUTS_PEM: path.join(work, 'inputs.pem'),
+              },
               stdio: ['ignore', 'ignore', 'pipe'],
             });
             let stderr = '';
