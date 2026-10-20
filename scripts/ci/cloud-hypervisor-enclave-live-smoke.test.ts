@@ -56,6 +56,15 @@ const harness = require(harnessPath) as {
   assertNoSentinelLeak(directories: string[], logs: string[], sentinel: string): void;
   assertExpectedToolResult(response: unknown, requestId: number, expected: unknown, label: string): void;
   assertNoSuccessfulResult(response: unknown): void;
+  assertNoVmResidue(expectedPrimary?: {
+    namespaces: string[];
+    processes: Array<{ pid: string; startTime: string }>;
+    cgroups: Array<{ name: string; device: number; inode: number }>;
+  }, observed?: {
+    namespaces: string[];
+    processes: Array<{ pid: string; startTime: string }>;
+    cgroups: Array<{ name: string; device: number; inode: number }>;
+  }): void;
   assertRecoveredInvocation(
     before: {
       runId: string;
@@ -763,18 +772,30 @@ describe('sanitized host startup diagnostics', () => {
     fs.writeFileSync(stderrFile, `[ERROR] Fatal error: Error: ${known}\n`);
     jest.spyOn(console, 'error').mockImplementation(() => {});
     const running = { exitCode: null as number | null, signalCode: null };
-    setTimeout(() => {
+    const inspect = jest.fn(() => {
       fs.rmSync(file);
       running.exitCode = 1;
-    }, 50);
-    await expect(harness.waitForBroker(running, 'awf-test-missing-container', Date.now() + 10_000, {
-      stage: 'initial', stderrFile, startupErrorFile: file,
-    })).rejects.toThrow(/AWF exited/);
-    const evidence = harness.startupEvidence(running, 'exit', 'initial', stderrFile, file);
-    expect(evidence.record).toMatchObject({ final: 'missing', source: 'cached' });
-    expect(evidence.record.cachedPolls).toBeGreaterThan(0);
-    expect(harness.startupDiagnostic(running, 'exit', 'initial', stderrFile, file))
-      .toMatchObject({ category: 'container-runtime', logInspection: 'structured', enclaveStartup: value });
+      return { status: 1, stdout: '' };
+    });
+    jest.doMock('child_process', () => ({
+      ...jest.requireActual('child_process'),
+      spawnSync: inspect,
+    }));
+    try {
+      let isolatedHarness!: typeof harness;
+      jest.isolateModules(() => { isolatedHarness = require(harnessPath); });
+      await expect(isolatedHarness.waitForBroker(running, 'awf-test-missing-container', Date.now() + 10_000, {
+        stage: 'initial', stderrFile, startupErrorFile: file,
+      })).rejects.toThrow(/AWF exited/);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      const evidence = isolatedHarness.startupEvidence(running, 'exit', 'initial', stderrFile, file);
+      expect(evidence.record).toMatchObject({ final: 'missing', source: 'cached' });
+      expect(evidence.record.cachedPolls).toBeGreaterThan(0);
+      expect(isolatedHarness.startupDiagnostic(running, 'exit', 'initial', stderrFile, file))
+        .toMatchObject({ category: 'container-runtime', logInspection: 'structured', enclaveStartup: value });
+    } finally {
+      jest.dontMock('child_process');
+    }
   });
 
   it('bounds all metadata even for malformed child state', () => {
@@ -1434,5 +1455,31 @@ describe('sanitized live acceptance failure reporting', () => {
     } finally {
       process.exitCode = originalExitCode;
     }
+  });
+});
+
+describe('intermediate Cloud Hypervisor cleanup with a live primary VM', () => {
+  const primary = {
+    namespaces: ['awfvm-primary'],
+    processes: [{ pid: '123', startTime: '456' }],
+    cgroups: [{ name: 'primary', device: 1, inode: 789 }],
+  };
+
+  it('accepts the exact still-live primary and rejects added enclave residue', () => {
+    expect(() => harness.assertNoVmResidue(primary, primary)).not.toThrow();
+    for (const observed of [
+      { ...primary, namespaces: [...primary.namespaces, 'awfvm-enclave'] },
+      { ...primary, processes: [...primary.processes, { pid: '124', startTime: '457' }] },
+      { ...primary, cgroups: [...primary.cgroups, { name: 'enclave', device: 1, inode: 790 }] },
+    ]) {
+      expect(() => harness.assertNoVmResidue(primary, observed))
+        .toThrow('Cloud Hypervisor enclave resource residue remains');
+    }
+  });
+
+  it('requires exactly one primary VM identity before allowing intermediate residue', () => {
+    expect(() => harness.assertNoVmResidue({
+      ...primary, processes: [...primary.processes, { pid: '124', startTime: '457' }],
+    }, primary)).toThrow('Could not verify the live Cloud Hypervisor primary VM');
   });
 });
