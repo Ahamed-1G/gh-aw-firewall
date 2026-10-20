@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 policy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-staging=$(mktemp -d /tmp/awf-ca-store.XXXXXX)
+staging=$(mktemp -d /run/awf-ca-store.XXXXXX)
 trap 'rm -rf "$staging"' EXIT HUP INT TERM
 sh "$policy_dir/filter-ca-store.sh" "$staging" /etc/ssl/certs
 # This script is for image-local stores only. Host mounts are handled by the

@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as https from 'node:https';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as tls from 'node:tls';
 
 const root = path.resolve(__dirname, '../..');
 const policyDir = path.join(root, 'containers/trust');
@@ -102,6 +103,31 @@ test('filters bundles and hashed directories without modifying input trust', () 
   expect(fs.readFileSync(path.join(work, 'cross-output/ca-certificates.crt'), 'utf8')).not.toContain(cross.trim());
 });
 
+test('deduplicates identical PEM blocks before invoking OpenSSL', () => {
+  const inputDir = path.join(work, 'duplicate-input');
+  const fakeBin = path.join(work, 'counting-bin');
+  const calls = path.join(work, 'openssl-calls');
+  fs.mkdirSync(inputDir);
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(path.join(inputDir, 'same.pem'), goodRoot);
+  fs.writeFileSync(path.join(inputDir, 'ca-certificates.crt'), goodRoot);
+  openssl('rehash', inputDir);
+  const realOpenSsl = execFileSync('which', ['openssl'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(fakeBin, 'openssl'),
+    '#!/bin/sh\ncase "$1" in x509|pkey|dgst) printf "%s\\n" "$1" >> "$AWF_OPENSSL_CALLS";; esac\nexec "$AWF_REAL_OPENSSL" "$@"\n');
+  fs.chmodSync(path.join(fakeBin, 'openssl'), 0o755);
+  execFileSync('sh', [path.join(work, 'filter-ca-store.sh'), path.join(work, 'deduplicated-output'),
+    inputDir], {
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      AWF_OPENSSL_CALLS: calls,
+      AWF_REAL_OPENSSL: realOpenSsl,
+    },
+  });
+  expect(fs.readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(5);
+});
+
 test('invalid and all-distrusted CA stores fail closed', () => {
   fs.writeFileSync(path.join(work, 'invalid.pem'), 'not a certificate');
   fs.writeFileSync(path.join(work, 'only-blocked.pem'), blockedRoot);
@@ -186,7 +212,52 @@ test.each(['https', 'tls', 'fetch'])('%s rejects compromised default/extra/expli
   }
 }, 30000);
 
-test('Node defaults no longer contain emergency-distrusted roots', () => {
+test('Node preserves private roots selected by OpenSSL on Node versions without CA APIs', async () => {
+  for (const [leaf, allowed] of [['bad-leaf', false], ['good-leaf', true]] as const) {
+    const server = https.createServer({
+      key: fs.readFileSync(path.join(work, `${leaf}.key`)),
+      cert: fs.readFileSync(path.join(work, `${leaf}.pem`)),
+    }, (_req, res) => res.end('ok'));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test server address');
+    try {
+      const script = `
+        const fail = () => process.exit(${allowed ? 1 : 0});
+        const pass = () => process.exit(${allowed ? 0 : 1});
+        require('https').get({host:'127.0.0.1', port:${address.port}, servername:'localhost'}, pass).on('error', fail);
+        setTimeout(() => process.exit(2), 5000).unref();
+      `;
+      const status = await new Promise<number>((resolve, reject) => {
+        const child = spawn(process.execPath, [
+          '--use-openssl-ca', '--require', path.join(work, 'policy.cjs'), '-e', script,
+        ], {
+          env: {
+            ...process.env,
+            NODE_EXTRA_CA_CERTS: '',
+            SSL_CERT_FILE: path.join(work, 'inputs.pem'),
+            SSL_CERT_DIR: '',
+          },
+          stdio: 'pipe',
+        });
+        let stderr = '';
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.on('error', reject);
+        child.on('close', code => code === 0
+          ? resolve(code) : reject(new Error(`OpenSSL-selected trust child failed for ${leaf}: ${stderr} (exit ${code})`)));
+      });
+      expect(status).toBe(0);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+}, 30000);
+
+const defaultCaApisAvailable = typeof tls.getCACertificates === 'function'
+  && typeof tls.setDefaultCACertificates === 'function';
+const testDefaultCaInspection = defaultCaApisAvailable ? test : test.skip;
+
+testDefaultCaInspection('Node defaults no longer contain emergency-distrusted roots', () => {
   const script = `
     const tls = require('tls'), {X509Certificate,createHash} = require('crypto'), assert = require('assert');
     const original = tls.createSecureContext;

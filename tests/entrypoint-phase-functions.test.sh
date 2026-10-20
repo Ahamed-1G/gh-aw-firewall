@@ -191,11 +191,20 @@ run_copy_system_ca_bundle_fixture() {
   tmp_dir="$(mktemp -d)"
   local host_root="${tmp_dir}/host-root"
   local fixture_entrypoint="${tmp_dir}/entrypoint-fixture.sh"
-  mkdir -p "${host_root}/etc/pki/tls/certs" "${host_root}/etc/ssl/certs"
+  local java_store="${host_root}/etc/ssl/certs/java/cacerts"
+  local java_link="${host_root}/usr/lib/jvm/fixture/lib/security/cacerts"
+  mkdir -p "${host_root}/etc/pki/tls/certs" "${host_root}/etc/ssl/certs/java" \
+    "${host_root}/etc/pki/ca-trust/extracted/pem" "$(dirname "${java_link}")"
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=private-fixture \
     -keyout "${tmp_dir}/fixture.key" -out "${host_root}/etc/pki/tls/certs/ca-bundle.crt" >/dev/null 2>&1
   cp "${host_root}/etc/pki/tls/certs/ca-bundle.crt" "${tmp_dir}/original.crt"
   ln -s ../../pki/tls/certs/ca-bundle.crt "${host_root}/etc/ssl/certs/ca-certificates.crt"
+  printf 'fixture-java-keystore' > "${java_store}"
+  ln -s /etc/ssl/certs/java/cacerts "${java_link}"
+  cp "${host_root}/etc/pki/tls/certs/ca-bundle.crt" \
+    "${host_root}/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+  printf 'email-only-anchor\n' > "${host_root}/etc/pki/ca-trust/extracted/pem/email-ca-bundle.pem"
+  printf 'code-signing-only-anchor\n' > "${host_root}/etc/pki/ca-trust/extracted/pem/objsign-ca-bundle.pem"
 
   write_entrypoint_fixture "${fixture_entrypoint}"
 
@@ -215,14 +224,19 @@ run_copy_system_ca_bundle_fixture() {
 
     unset SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE CURL_CA_BUNDLE GIT_SSL_CAINFO SYSTEM_CA_CHROOT
     copy_system_ca_bundle
-    [ "${SSL_CERT_FILE}" = "/run/awf-lib/trust/ca-certificates.crt" ]
-    [ -r "${AWF_TEST_HOST_ROOT}${SSL_CERT_FILE}" ]
-    [ "${NODE_EXTRA_CA_CERTS}" = "${SSL_CERT_FILE}" ]
+    [ "${SSL_CERT_FILE}" = "/run/awf-lib/trust/ca-certificates.crt" ] || exit 1
+    [ -r "${AWF_TEST_HOST_ROOT}${SSL_CERT_FILE}" ] || exit 1
+    [ "${NODE_EXTRA_CA_CERTS}" = "${SSL_CERT_FILE}" ] || exit 1
+    [ "$(readlink "${java_link}")" = "/etc/ssl/certs/java/cacerts" ] || exit 1
+    cmp "${java_store}" "${host_root}/run/awf-lib/trust/certs/java/cacerts" || exit 1
+    ! grep -q 'email-only-anchor\|code-signing-only-anchor' \
+      "${host_root}/run/awf-lib/trust/ca-certificates.crt" || exit 1
 
-    cmp "${host_root}/etc/pki/tls/certs/ca-bundle.crt" "${tmp_dir}/original.crt"
-    grep -q 'remount,ro,bind' "${tmp_dir}/mounts"
-    grep -q '/etc/pki/tls/certs' "${tmp_dir}/mounts"
-    [ "${SSL_CERT_DIR}" = "/run/awf-lib/trust/certs" ]
+    cmp "${host_root}/etc/pki/tls/certs/ca-bundle.crt" "${tmp_dir}/original.crt" || exit 1
+    grep -q 'remount,ro,bind' "${tmp_dir}/mounts" || exit 1
+    grep -q '/etc/pki/tls/certs' "${tmp_dir}/mounts" || exit 1
+    grep -q '/etc/pki/ca-trust/extracted/pem' "${tmp_dir}/mounts" || exit 1
+    [ "${SSL_CERT_DIR}" = "/run/awf-lib/trust/certs" ] || exit 1
     case "${NODE_OPTIONS}" in *--require=/run/awf-lib/trust/node-trust.cjs*) ;; *) exit 1 ;; esac
   )
   result=$?

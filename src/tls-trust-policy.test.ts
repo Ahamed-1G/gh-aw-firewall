@@ -7,11 +7,26 @@ type Policy = typeof import('./tls-trust-policy');
 const trusted = rootCertificates.find(pem => new X509Certificate(pem).subject.includes('ISRG Root X1'))!;
 const blocked = readFileSync(path.resolve(__dirname, '../scripts/security/fixtures/emsign-ecc-g3.pem'), 'utf8').trim();
 const originalExtraCa = process.env.NODE_EXTRA_CA_CERTS;
+const originalNodeOptions = process.env.NODE_OPTIONS;
+const originalSslCertFile = process.env.SSL_CERT_FILE;
+const originalSslCertDir = process.env.SSL_CERT_DIR;
 
 function load(options: {
   legacy?: boolean;
   defaults?: string[];
   extra?: string;
+  opensslFile?: string;
+  opensslDirectory?: string;
+  opensslDirectoryCertificate?: string;
+  missingOpenSslFile?: boolean;
+  missingOpenSslDirectory?: boolean;
+  missingOpenSslCertificate?: boolean;
+  opensslDirectoryEntryIsFile?: boolean;
+  opensslFileError?: Error;
+  opensslDirectoryError?: Error;
+  opensslCertificateError?: Error;
+  opensslDefaultDirectory?: string;
+  opensslDefaultPathOutput?: string;
   extraError?: Error;
   setter?: boolean;
 } = {}) {
@@ -19,10 +34,25 @@ function load(options: {
   const createSecureContext = jest.fn().mockReturnValue(nativeContext);
   const setDefaultCACertificates = jest.fn();
   const getCACertificates = jest.fn().mockReturnValue(options.defaults ?? [trusted, blocked]);
-  const read = jest.fn(() => {
-    if (options.extraError) throw options.extraError;
-    return options.extra;
+  const read = jest.fn((filename?: string) => {
+    if (options.extraError && filename === '/private-ca.pem') throw options.extraError;
+    if (options.opensslFileError && filename === '/openssl-ca.pem') throw options.opensslFileError;
+    if (filename === '/openssl-ca.pem' && options.missingOpenSslFile) {
+      throw Object.assign(new Error('file is missing'), { code: 'ENOENT' });
+    }
+    if (options.opensslCertificateError && filename === '/openssl-certs/deadbeef.0') {
+      throw options.opensslCertificateError;
+    }
+    if (filename === '/openssl-certs/deadbeef.0' && options.missingOpenSslCertificate) {
+      throw Object.assign(new Error('certificate is missing'), { code: 'ENOENT' });
+    }
+    if (filename === '/openssl-certs/deadbeef.0') return options.opensslDirectoryCertificate;
+    if (filename === '/openssl-default/certs/deadbeef.0') return options.opensslDirectoryCertificate;
+    if (filename === '/private-ca.pem') return options.extra;
+    return options.opensslFile;
   });
+  const execFileSync = jest.fn(() => options.opensslDefaultPathOutput
+    ?? `OPENSSLDIR: "${options.opensslDefaultDirectory ?? '/openssl-default'}"\n`);
   if (options.extra !== undefined || options.extraError) process.env.NODE_EXTRA_CA_CERTS = '/private-ca.pem';
   jest.doMock('node:tls', () => ({
     rootCertificates: options.defaults ?? [trusted, blocked],
@@ -30,22 +60,49 @@ function load(options: {
     setDefaultCACertificates: options.legacy || options.setter === false ? undefined : setDefaultCACertificates,
     createSecureContext,
   }));
-  jest.doMock('node:fs', () => ({ readFileSync: read }));
+  jest.doMock('node:fs', () => ({
+    readFileSync: read,
+    readdirSync: jest.fn((directory: string) => {
+      if (options.opensslDirectoryError) throw options.opensslDirectoryError;
+      if (options.missingOpenSslDirectory) {
+        throw Object.assign(new Error('directory is missing'), { code: 'ENOENT' });
+      }
+      return options.opensslDirectory || directory === '/openssl-default/certs'
+        ? ['deadbeef.0', 'README'] : [];
+    }),
+    statSync: jest.fn(() => {
+      if (options.opensslCertificateError) throw options.opensslCertificateError;
+      if (options.missingOpenSslCertificate) {
+        throw Object.assign(new Error('certificate is missing'), { code: 'ENOENT' });
+      }
+      return { isFile: () => options.opensslDirectoryEntryIsFile !== false };
+    }),
+  }));
+  jest.doMock('node:child_process', () => ({ execFileSync }));
   let policy!: Policy;
   let tls!: typeof import('node:tls');
   jest.isolateModules(() => {
     policy = jest.requireActual<Policy>('./tls-trust-policy');
     tls = jest.requireMock<typeof import('node:tls')>('node:tls');
   });
-  return { policy, tls, createSecureContext, setDefaultCACertificates, getCACertificates, read, nativeContext };
+  return {
+    policy, tls, createSecureContext, setDefaultCACertificates, getCACertificates, read, execFileSync, nativeContext,
+  };
 }
 
 beforeEach(() => { delete process.env.NODE_EXTRA_CA_CERTS; });
 afterEach(() => {
   jest.dontMock('node:tls');
   jest.dontMock('node:fs');
+  jest.dontMock('node:child_process');
   if (originalExtraCa === undefined) delete process.env.NODE_EXTRA_CA_CERTS;
   else process.env.NODE_EXTRA_CA_CERTS = originalExtraCa;
+  if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+  else process.env.NODE_OPTIONS = originalNodeOptions;
+  if (originalSslCertFile === undefined) delete process.env.SSL_CERT_FILE;
+  else process.env.SSL_CERT_FILE = originalSslCertFile;
+  if (originalSslCertDir === undefined) delete process.env.SSL_CERT_DIR;
+  else process.env.SSL_CERT_DIR = originalSslCertDir;
 });
 
 test('filters modern defaults and extra roots and installs the policy only once', () => {
@@ -59,7 +116,7 @@ test('filters modern defaults and extra roots and installs the policy only once'
 
 test.each([false, true])('default and null CA options use sanitized defaults (legacy=%s)', legacy => {
   const f = load({ legacy });
-  for (const options of [undefined, { ca: null }]) {
+  for (const options of [undefined, null, { ca: null }, { ca: '' }]) {
     // Node accepts ca:null at runtime, despite its declaration excluding null.
     const result = options === undefined
       ? f.tls.createSecureContext()
@@ -68,6 +125,97 @@ test.each([false, true])('default and null CA options use sanitized defaults (le
     expect(f.createSecureContext).toHaveBeenLastCalledWith({ ca: [trusted] });
   }
   expect(f.setDefaultCACertificates).toHaveBeenCalledTimes(legacy ? 0 : 1);
+});
+
+test('legacy Node preserves OpenSSL-selected CA sources instead of bundled roots', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const f = load({
+    legacy: true,
+    opensslFile: blocked,
+    opensslDirectory: '/openssl-certs',
+    opensslDirectoryCertificate: trusted,
+  });
+  expect(f.read).toHaveBeenCalledWith('/openssl-ca.pem', 'utf8');
+  expect(f.read).toHaveBeenCalledWith('/openssl-certs/deadbeef.0', 'utf8');
+  f.tls.createSecureContext();
+  expect(f.createSecureContext).toHaveBeenCalledWith({ ca: [trusted] });
+});
+
+test('legacy Node discovers OpenSSL default CA paths when build metadata omits them', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  delete process.env.SSL_CERT_FILE;
+  delete process.env.SSL_CERT_DIR;
+  const f = load({
+    legacy: true,
+    opensslFile: blocked,
+    opensslDirectory: '/openssl-default/certs',
+    opensslDirectoryCertificate: trusted,
+  });
+  expect(f.execFileSync).toHaveBeenCalledWith('openssl', ['version', '-d'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  expect(f.read).toHaveBeenCalledWith('/openssl-default/cert.pem', 'utf8');
+  f.tls.createSecureContext();
+  expect(f.createSecureContext).toHaveBeenCalledWith({ ca: [trusted] });
+});
+
+test.each([
+  ['unreadable file', 'file'],
+  ['unreadable directory', 'directory'],
+  ['unreadable hashed certificate', 'certificate'],
+])('fails closed on an %s in the selected OpenSSL trust store', (_label, source) => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+  expect(() => load({
+    legacy: true,
+    opensslFile: trusted,
+    opensslDirectory: '/openssl-certs',
+    opensslDirectoryCertificate: trusted,
+    opensslFileError: source === 'file' ? error : undefined,
+    opensslDirectoryError: source === 'directory' ? error : undefined,
+    opensslCertificateError: source === 'certificate' ? error : undefined,
+  })).toThrow('permission denied');
+});
+
+test('fails closed when OpenSSL default directory cannot be discovered', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  delete process.env.SSL_CERT_FILE;
+  delete process.env.SSL_CERT_DIR;
+  expect(() => load({ legacy: true, opensslDefaultPathOutput: 'no OPENSSLDIR here' }))
+    .toThrow('Unable to determine OpenSSL default CA paths');
+});
+
+test('fails closed when the selected OpenSSL sources contain no readable CA certificates', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  expect(() => load({
+    legacy: true,
+    opensslDirectory: '/openssl-certs',
+    opensslDirectoryEntryIsFile: false,
+  })).toThrow('empty default CA store');
+});
+
+test.each(['file', 'directory', 'certificate'])('ignores missing OpenSSL trust path %s when another source is available', missing => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const f = load({
+    legacy: true,
+    opensslFile: trusted,
+    opensslDirectory: '/openssl-certs',
+    opensslDirectoryCertificate: trusted,
+    missingOpenSslFile: missing === 'file',
+    missingOpenSslDirectory: missing === 'directory',
+    missingOpenSslCertificate: missing === 'certificate',
+  });
+  f.tls.createSecureContext();
+  expect(f.createSecureContext).toHaveBeenCalledWith({ ca: [trusted] });
 });
 
 test('filters explicit CA strings, buffers and arrays without dropping other options', () => {

@@ -27,9 +27,25 @@ See [Compatibility](docs/compatibility.md) for full details on supported version
 ## Get started fast
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/github/gh-aw-firewall/main/install.sh | sudo bash
 sudo awf --allow-domains github.com -- curl https://api.github.com
 ```
+
+For CI, prefer the [setup action](docs/github_actions.md) pinned to a reviewed
+commit. For local installation, first obtain and review `install.sh` through an
+independently authenticated channel. The installer requires a trusted `gh` CLI
+with GitHub authentication; because `sudo` normally changes `HOME` and drops
+tokens, pass the token explicitly:
+
+```bash
+gh auth status
+export GH_TOKEN="$(gh auth token)"
+sudo --preserve-env=GH_TOKEN bash ./install.sh
+unset GH_TOKEN
+```
+
+Do not pipe an unauthenticated download into `sudo bash`. See
+[release security](docs/releasing.md#initial-trust-is-a-prerequisite-not-something-the-installer-can-create)
+for the initial trust requirements.
 
 The `--` separator divides firewall options from the command to run.
 

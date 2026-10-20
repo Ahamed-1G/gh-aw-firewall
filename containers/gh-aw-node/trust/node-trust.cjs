@@ -8,7 +8,9 @@ exports.distrustedSpkis = void 0;
 exports.filterCaCertificates = filterCaCertificates;
 exports.applyTlsTrustPolicy = applyTlsTrustPolicy;
 const node_crypto_1 = require("node:crypto");
+const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
+const node_path_1 = __importDefault(require("node:path"));
 const node_tls_1 = __importDefault(require("node:tls"));
 // October 2026 eMudhra disclosure: eight compromised keys, followed by the
 // four issuing/cross-signing roots. Root distrust is an emergency fallback for
@@ -29,6 +31,63 @@ exports.distrustedSpkis = new Set([
     '8d417db2dd8bf5e3084d1e3f196d583849d81bdd4c00c70b9d39369e96b8c782',
 ]);
 const certificateCache = new Map();
+function readSelectedOpenSslCertificates() {
+    const variables = process.config.variables;
+    let openSslDir;
+    if ((!variables.openssl_default_cert_file && process.env.SSL_CERT_FILE === undefined)
+        || (!variables.openssl_default_cert_dir && process.env.SSL_CERT_DIR === undefined)) {
+        const output = (0, node_child_process_1.execFileSync)('openssl', ['version', '-d'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const match = output.match(/^OPENSSLDIR: "([^"]+)"$/m);
+        if (!match)
+            throw new Error('Unable to determine OpenSSL default CA paths');
+        openSslDir = match[1];
+    }
+    const file = process.env.SSL_CERT_FILE
+        ?? variables.openssl_default_cert_file
+        ?? node_path_1.default.join(openSslDir, 'cert.pem');
+    const dirList = process.env.SSL_CERT_DIR
+        ?? variables.openssl_default_cert_dir
+        ?? node_path_1.default.join(openSslDir, 'certs');
+    const dirs = dirList.split(node_path_1.default.delimiter).filter(Boolean);
+    const certificates = [];
+    if (file) {
+        try {
+            certificates.push((0, node_fs_1.readFileSync)(file, 'utf8'));
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+        }
+    }
+    for (const dir of dirs) {
+        let entries;
+        try {
+            entries = (0, node_fs_1.readdirSync)(dir);
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                continue;
+            throw error;
+        }
+        for (const entry of entries) {
+            if (!/^[a-f0-9]{8}\.\d+$/i.test(entry))
+                continue;
+            const candidate = node_path_1.default.join(dir, entry);
+            try {
+                if ((0, node_fs_1.statSync)(candidate).isFile())
+                    certificates.push((0, node_fs_1.readFileSync)(candidate, 'utf8'));
+            }
+            catch (error) {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            }
+        }
+    }
+    return certificates;
+}
 function filterCaCertificates(ca) {
     const inputs = Array.isArray(ca) ? ca : [ca];
     return inputs.flatMap(input => {
@@ -55,9 +114,10 @@ let installed = false;
 function applyTlsTrustPolicy() {
     if (installed)
         return;
+    const usesOpenSslCa = /(?:^|\s)--use-openssl-ca(?:\s|$)/.test(`${process.execArgv.join(' ')} ${process.env.NODE_OPTIONS || ''}`);
     const defaults = node_tls_1.default.getCACertificates
         ? [...node_tls_1.default.getCACertificates('default')]
-        : [...node_tls_1.default.rootCertificates];
+        : usesOpenSslCa ? readSelectedOpenSslCertificates() : [...node_tls_1.default.rootCertificates];
     // Read explicitly as well: Node otherwise warns and ignores malformed or
     // missing NODE_EXTRA_CA_CERTS, which must not silently defeat private trust.
     if (process.env.NODE_EXTRA_CA_CERTS) {
@@ -70,11 +130,14 @@ function applyTlsTrustPolicy() {
     const createSecureContext = node_tls_1.default.createSecureContext;
     // Also cover explicit custom CA options and Node versions predating the
     // default-CA API. This affects https, fetch/undici and direct tls.connect.
-    node_tls_1.default.createSecureContext = (options = {}) => createSecureContext({
-        ...options,
-        ca: options.ca === undefined || options.ca === null
-            ? filteredDefaults : filterCaCertificates(options.ca),
-    });
+    node_tls_1.default.createSecureContext = (options = {}) => {
+        const normalizedOptions = options ?? {};
+        return createSecureContext({
+            ...normalizedOptions,
+            ca: normalizedOptions.ca
+                ? filterCaCertificates(normalizedOptions.ca) : filteredDefaults,
+        });
+    };
     installed = true;
 }
 applyTlsTrustPolicy();

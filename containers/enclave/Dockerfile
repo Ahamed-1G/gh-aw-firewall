@@ -74,16 +74,15 @@ FROM node:26.11.1-alpine3.24@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2
 
 COPY trust/ /opt/awf/trust/
 RUN apk add --no-cache openssl ca-certificates \
-    && sh /opt/awf/trust/install-system-trust.sh \
-    && sh /opt/awf/trust/install-node-trust.sh
-
-ARG AWF_SOURCE_REVISION=unavailable
-
-RUN apk upgrade --no-cache \
+    && apk upgrade --no-cache \
     && apk add --no-cache docker-cli \
+    && sh /opt/awf/trust/install-system-trust.sh \
+    && sh /opt/awf/trust/install-node-trust.sh \
     && test -x /usr/bin/docker \
     && rm -rf /usr/local/lib/node_modules/npm \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
+ARG AWF_SOURCE_REVISION=unavailable
 WORKDIR /opt/awf/enclave/mcp-server
 LABEL org.opencontainers.image.revision="${AWF_SOURCE_REVISION}"
 COPY bounded-execution/ /opt/awf/bounded-execution/

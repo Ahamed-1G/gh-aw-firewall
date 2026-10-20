@@ -152,11 +152,11 @@ if [ "${AWF_SSL_BUMP_ENABLED}" = "true" ]; then
     echo "[entrypoint] CA certificates updated for SSL Bump"
     echo "[entrypoint] NODE_EXTRA_CA_CERTS set to $NODE_EXTRA_CA_CERTS"
     echo "[entrypoint] ⚠️  WARNING: HTTPS traffic will be intercepted for URL inspection"
+    sh /opt/awf/trust/install-system-trust.sh
   else
     echo "[entrypoint][WARN] SSL Bump enabled but CA certificate not found"
   fi
 fi
-sh /opt/awf/trust/install-system-trust.sh
 }
 
 wait_for_iptables() {
@@ -1144,8 +1144,9 @@ copy_system_ca_bundle() {
     /host/etc/pki/ca-trust/extracted/pem
     /host/etc/pki/tls/certs
   )
-  for candidate in "${directories[@]}" \
-    /host/etc/ssl/cert.pem /host/etc/pki/tls/cert.pem; do
+  for candidate in /host/etc/ssl/certs /host/etc/pki/tls/certs \
+    /host/etc/ssl/cert.pem /host/etc/pki/tls/cert.pem \
+    /host/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem; do
     [ ! -e "$candidate" ] || inputs+=("$candidate")
   done
   if [ -n "${AWF_CA_CHROOT:-}" ]; then
@@ -1164,6 +1165,10 @@ copy_system_ca_bundle() {
   mkdir -p "$trust"
   sh /opt/awf/trust/filter-ca-store.sh "$trust" "${inputs[@]}"
   cp /opt/awf/trust/node-trust.cjs "$trust/node-trust.cjs"
+  if [ -e /host/etc/ssl/certs/java/cacerts ]; then
+    mkdir -p "$trust/certs/java"
+    cp -L /host/etc/ssl/certs/java/cacerts "$trust/certs/java/cacerts"
+  fi
   # The /run staging root is container-local; none of these operations writes
   # through the read-only host /etc bind mounts.
   for candidate in "${directories[@]}"; do

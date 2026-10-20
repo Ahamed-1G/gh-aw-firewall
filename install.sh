@@ -7,15 +7,13 @@ set -e
 # Obtain this installer and the gh verifier through an independently trusted channel;
 # piping an unauthenticated HTTPS download into a shell cannot authenticate itself.
 #
-# Usage (after independently authenticating this script and gh):
-#   # Install latest version
-#   sudo bash ./install.sh
-#
-#   # Install specific version
-#   sudo bash ./install.sh v1.0.0
-#
-#   # Or with environment variable
-#   sudo AWF_VERSION=v1.0.0 bash ./install.sh
+# Obtain and review this script through an independently authenticated channel;
+# do not pipe an unauthenticated download into a privileged shell. Authenticate
+# gh as your user, then explicitly preserve its token across sudo:
+#   export GH_TOKEN="$(gh auth token)"
+#   sudo --preserve-env=GH_TOKEN bash ./install.sh
+#   sudo --preserve-env=GH_TOKEN bash ./install.sh v1.0.0
+# Alternatively, set GITHUB_TOKEN and preserve that variable instead.
 #
 # Security features:
 #   - Uses curl -f to fail on HTTP errors (404, 403, etc.)

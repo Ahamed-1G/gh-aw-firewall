@@ -31,9 +31,18 @@ for input in "$@"; do
     fi
 done
 awk -v dir="$work" '
-  /-----BEGIN CERTIFICATE-----/ { if (active) exit 1; active=1; count++; file=dir "/cert-" count ".pem" }
-  active { print > file }
-  /-----END CERTIFICATE-----/ { if (!active) exit 1; close(file); active=0 }
+  /-----BEGIN CERTIFICATE-----/ { if (active) exit 1; active=1; block="" }
+  active { block=block $0 "\n" }
+  /-----END CERTIFICATE-----/ {
+    if (!active) exit 1
+    if (!seen[block]++) {
+      count++
+      unique=dir "/cert-" count ".pem"
+      print block > unique
+      close(unique)
+    }
+    active=0
+  }
   /-----BEGIN TRUSTED CERTIFICATE-----/ { exit 1 }
   END { if (active || !count) exit 1 }
 ' "$work/input.pem" || { echo "AWF trust policy: invalid or empty PEM CA store" >&2; exit 1; }
