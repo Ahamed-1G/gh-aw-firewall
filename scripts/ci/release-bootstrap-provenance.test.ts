@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { spawnSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import * as yaml from 'js-yaml';
 
 const root = path.resolve(__dirname, '../..');
@@ -122,6 +122,34 @@ cp "$CASE_DIR/assets/$asset" "$output"
 afterAll(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 describe('release bootstrap authentication', () => {
+  it('validates the isolated signed fixtures used by composite-action CI', () => {
+    execFileSync(process.execPath, ['--test', 'scripts/ci/action-fixture-smoke.cjs'], { cwd: root, stdio: 'pipe' });
+  }, 30000);
+
+  it('isolates action fixtures from the optional live attested-release test', () => {
+    const workflow = yaml.load(fs.readFileSync(path.join(root, '.github/workflows/test-action.yml'), 'utf8')) as {
+      jobs: Record<string, { if?: string; steps: Step[] }>;
+    };
+    for (const name of ['test-action-latest', 'test-action-specific-version', 'test-action-with-images']) {
+      const steps = workflow.jobs[name].steps;
+      const prepare = steps.findIndex(step => step.run === 'node scripts/ci/setup-action-test-fixtures.cjs');
+      const install = steps.findIndex(step => step.uses === './');
+      expect(prepare).toBeGreaterThanOrEqual(0);
+      expect(prepare).toBeLessThan(install);
+      expect(steps[install].with?.version).toBe(name === 'test-action-latest' ? undefined : tag);
+      expect(steps.some(step => step.run?.includes('verified.log'))).toBe(true);
+    }
+    const live = workflow.jobs['test-action-live-attested-release'];
+    expect(live.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(live.steps.some(step => step.run?.includes('setup-action-test-fixtures'))).toBe(false);
+    expect(live.steps.find(step => step.uses === './')?.with?.['pull-images']).toBe('true');
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps.filter(step => step.run)) {
+        expect(spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' }).status).toBe(0);
+      }
+    }
+  });
+
   it.each(['installer', 'action'] as const)('installs an authenticated %s payload', target => {
     const f = fixture();
     const result = f.run(target);

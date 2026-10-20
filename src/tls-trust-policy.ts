@@ -67,7 +67,8 @@ export function applyTlsTrustPolicy(): void {
   // default-CA API. This affects https, fetch/undici and direct tls.connect.
   tls.createSecureContext = (options = {}) => createSecureContext({
     ...options,
-    ca: options.ca === undefined ? filteredDefaults : filterCaCertificates(options.ca),
+    ca: options.ca === undefined || options.ca === null
+      ? filteredDefaults : filterCaCertificates(options.ca),
   });
   installed = true;
 }

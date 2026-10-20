@@ -97,3 +97,22 @@ read-only at `/work`, and `containers/trust` mounted read-only at
 `/opt/awf/trust`. It rejects execution outside a container or with an existing
 `/host`, verifies the real bind overlays, and checks that the source store stays
 unchanged. Do not run this mount test on a host or in a live AWF container.
+
+The three positive action CI jobs use isolated local release fixtures because
+historical releases cannot retroactively supply the required provenance.
+`scripts/ci/setup-action-test-fixtures.cjs` generates an executable, signed
+metadata, and ephemeral Ed25519 signatures, with test-only transport, verifier,
+and Docker stand-ins. They exercise the real composite-action shell, required
+verification constraints, metadata binding, and digest-pull requests; they do
+**not** validate GitHub/Sigstore attestations or download real container images.
+There is no fixture option or legacy-release exception in the production action.
+
+Run `npm test -- scripts/ci/release-bootstrap-provenance.test.ts` for these
+regressions. Its standalone `node --test scripts/ci/action-fixture-smoke.cjs`
+also runs the actual installation scenarios on Linux with a C compiler, Bash,
+and `file`; non-Linux hosts only run the fixture verifier checks. Missing legacy
+metadata and tampered fixture signatures must still fail closed.
+Before rollout, use the **Test Setup Action** workflow's manual
+`attested-version` input to test a genuinely published attested release against
+real GitHub verification and digest-pinned image pulls. That job never prepares
+the local fixtures.

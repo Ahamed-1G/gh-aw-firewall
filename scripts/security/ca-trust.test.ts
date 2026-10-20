@@ -158,14 +158,21 @@ test.each(['https', 'tls', 'fetch'])('%s rejects compromised default/extra/expli
 
 test('Node defaults no longer contain emergency-distrusted roots', () => {
   const script = `
-    const tls = require('tls'), {X509Certificate,createHash} = require('crypto');
+    const tls = require('tls'), {X509Certificate,createHash} = require('crypto'), assert = require('assert');
+    const original = tls.createSecureContext;
+    let appliedCa;
+    tls.createSecureContext = options => { appliedCa = options.ca; return original(options); };
     const {distrustedSpkis} = require(${JSON.stringify(path.join(policyDir, 'node-trust.cjs'))});
-    for (const pem of tls.getCACertificates('default')) {
-      const key = new X509Certificate(pem).publicKey.export({format:'der',type:'spki'});
-      if (distrustedSpkis.has(createHash('sha256').update(key).digest('hex'))) process.exit(1);
+    for (const options of [{}, {ca:null}]) {
+      tls.createSecureContext(options);
+      assert(Array.isArray(appliedCa) && appliedCa.length > 0);
+      for (const pem of [...appliedCa, ...(tls.getCACertificates?.('default') || [])]) {
+        const key = new X509Certificate(pem).publicKey.export({format:'der',type:'spki'});
+        assert(!distrustedSpkis.has(createHash('sha256').update(key).digest('hex')));
+      }
     }
   `;
-  execFileSync(process.execPath, ['-r', path.join(policyDir, 'node-trust.cjs'), '-e', script]);
+  execFileSync(process.execPath, ['-e', script]);
 });
 
 test('all gh builds use the fixed Go toolchain and assert compiled metadata', () => {

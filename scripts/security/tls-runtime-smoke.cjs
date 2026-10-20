@@ -55,7 +55,7 @@ test('HTTPS, direct TLS and fetch enforce default, extra and explicit CA distrus
       await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
       const { port } = server.address();
       for (const mode of ['https', 'tls', 'fetch']) {
-        for (const explicit of [false, true]) {
+        for (const explicit of [false, true, null]) {
           const allowed = name === 'private-awf';
           const script = `
             const fs = require('fs');
@@ -65,6 +65,7 @@ test('HTTPS, direct TLS and fetch enforce default, extra and explicit CA distrus
             const allowed = process.env.AWF_ALLOWED === '1';
             const options = { host: '127.0.0.1', port, servername: 'localhost' };
             if (explicit) options.ca = fs.readFileSync(process.env.AWF_INPUTS_PEM);
+            else if (process.env.AWF_EXPLICIT === 'null') options.ca = null;
             const fail = () => process.exit(allowed ? 1 : 0);
             const pass = () => process.exit(allowed ? 0 : 1);
             if (mode === 'tls') require('tls').connect(options, pass).on('error', fail);
@@ -79,7 +80,7 @@ test('HTTPS, direct TLS and fetch enforce default, extra and explicit CA distrus
                 NODE_EXTRA_CA_CERTS: path.join(work, 'inputs.pem'),
                 AWF_MODE: mode,
                 AWF_PORT: String(port),
-                AWF_EXPLICIT: explicit ? '1' : '0',
+                AWF_EXPLICIT: explicit === null ? 'null' : explicit ? '1' : '0',
                 AWF_ALLOWED: allowed ? '1' : '0',
                 AWF_INPUTS_PEM: path.join(work, 'inputs.pem'),
               },
