@@ -8,6 +8,9 @@ import * as tls from 'node:tls';
 
 const root = path.resolve(__dirname, '../..');
 const policyDir = path.join(root, 'containers/trust');
+const { extractDistrustedSpkis } = require('./generate-trust-policy.cjs') as {
+  extractDistrustedSpkis: (source: string) => string[];
+};
 let work: string;
 let blockedRoot: string;
 let goodRoot: string;
@@ -59,6 +62,24 @@ afterAll(() => fs.rmSync(work, { recursive: true, force: true }));
 
 test('generated Docker trust policies remain synchronized with canonical TypeScript', () => {
   execFileSync(process.execPath, ['scripts/security/generate-trust-policy.cjs', '--check'], { cwd: root });
+});
+
+test('trust policy generator parses validated SPKI literals independent of quote style', () => {
+  const keys = ['a'.repeat(64), 'b'.repeat(64)];
+  for (const quote of ["'", '"']) {
+    const entries = keys.map(key => `${quote}${key}${quote}`).join(', ');
+    expect(extractDistrustedSpkis(`export const distrustedSpkis = new Set([${entries}]);`)).toEqual(keys);
+  }
+});
+
+test.each([
+  'export const distrustedSpkis = new Set([]);',
+  `export const distrustedSpkis = new Set(['${'a'.repeat(63)}']);`,
+  `export const distrustedSpkis = new Set(['${'a'.repeat(64)}', '${'a'.repeat(64)}']);`,
+  `export const distrustedSpkis = new Set([...'${'a'.repeat(64)}']);`,
+  `export const other = new Set(['${'a'.repeat(64)}']);`,
+])('trust policy generator rejects malformed canonical hash declarations', source => {
+  expect(() => extractDistrustedSpkis(source)).toThrow();
 });
 
 test('dependency-free runtime transport smoke also runs in the root regression suite', () => {
