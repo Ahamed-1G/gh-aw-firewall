@@ -8,9 +8,9 @@ import * as tls from 'node:tls';
 
 const root = path.resolve(__dirname, '../..');
 const policyDir = path.join(root, 'containers/trust');
-const { extractDistrustedSpkis } = require('./generate-trust-policy.cjs') as {
+const { extractDistrustedSpkis } = jest.requireActual<{
   extractDistrustedSpkis: (source: string) => string[];
-};
+}>('./generate-trust-policy.cjs');
 let work: string;
 let blockedRoot: string;
 let goodRoot: string;
@@ -233,7 +233,7 @@ test.each(['https', 'tls', 'fetch'])('%s rejects compromised default/extra/expli
   }
 }, 30000);
 
-test('Node preserves private roots selected by OpenSSL on Node versions without CA APIs', async () => {
+test('Node preserves private roots selected by OpenSSL', async () => {
   for (const [leaf, allowed] of [['bad-leaf', false], ['good-leaf', true]] as const) {
     const server = https.createServer({
       key: fs.readFileSync(path.join(work, `${leaf}.key`)),

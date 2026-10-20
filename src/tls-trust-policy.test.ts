@@ -1,5 +1,5 @@
 import { X509Certificate } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { constants, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { rootCertificates } from 'node:tls';
 
@@ -25,6 +25,7 @@ function load(options: {
   opensslFileError?: Error;
   opensslDirectoryError?: Error;
   opensslCertificateError?: Error;
+  opensslCertificateReadError?: Error;
   opensslDefaultDirectory?: string;
   opensslDefaultPathOutput?: string;
   extraError?: Error;
@@ -34,7 +35,21 @@ function load(options: {
   const createSecureContext = jest.fn().mockReturnValue(nativeContext);
   const setDefaultCACertificates = jest.fn();
   const getCACertificates = jest.fn().mockReturnValue(options.defaults ?? [trusted, blocked]);
-  const read = jest.fn((filename?: string) => {
+  const descriptors = new Map<number, string>();
+  const open = jest.fn((filename: string) => {
+    if (options.missingOpenSslCertificate) {
+      throw Object.assign(new Error('certificate is missing'), { code: 'ENOENT' });
+    }
+    descriptors.set(42, filename);
+    return 42;
+  });
+  const close = jest.fn();
+  const inspect = jest.fn(() => {
+    if (options.opensslCertificateError) throw options.opensslCertificateError;
+    return { isFile: () => options.opensslDirectoryEntryIsFile !== false };
+  });
+  const read = jest.fn((input?: string | number) => {
+    const filename = typeof input === 'number' ? descriptors.get(input) : input;
     if (options.extraError && filename === '/private-ca.pem') throw options.extraError;
     if (options.opensslFileError && filename === '/openssl-ca.pem') throw options.opensslFileError;
     if (filename === '/openssl-ca.pem' && options.missingOpenSslFile) {
@@ -42,6 +57,9 @@ function load(options: {
     }
     if (options.opensslCertificateError && filename === '/openssl-certs/deadbeef.0') {
       throw options.opensslCertificateError;
+    }
+    if (options.opensslCertificateReadError && filename === '/openssl-certs/deadbeef.0') {
+      throw options.opensslCertificateReadError;
     }
     if (filename === '/openssl-certs/deadbeef.0' && options.missingOpenSslCertificate) {
       throw Object.assign(new Error('certificate is missing'), { code: 'ENOENT' });
@@ -61,6 +79,10 @@ function load(options: {
     createSecureContext,
   }));
   jest.doMock('node:fs', () => ({
+    constants,
+    openSync: open,
+    closeSync: close,
+    fstatSync: inspect,
     readFileSync: read,
     readdirSync: jest.fn((directory: string) => {
       if (options.opensslDirectoryError) throw options.opensslDirectoryError;
@@ -69,13 +91,6 @@ function load(options: {
       }
       return options.opensslDirectory || directory === '/openssl-default/certs'
         ? ['deadbeef.0', 'README'] : [];
-    }),
-    statSync: jest.fn(() => {
-      if (options.opensslCertificateError) throw options.opensslCertificateError;
-      if (options.missingOpenSslCertificate) {
-        throw Object.assign(new Error('certificate is missing'), { code: 'ENOENT' });
-      }
-      return { isFile: () => options.opensslDirectoryEntryIsFile !== false };
     }),
   }));
   jest.doMock('node:child_process', () => ({ execFileSync }));
@@ -87,10 +102,14 @@ function load(options: {
   });
   return {
     policy, tls, createSecureContext, setDefaultCACertificates, getCACertificates, read, execFileSync, nativeContext,
+    open, close, inspect,
   };
 }
 
-beforeEach(() => { delete process.env.NODE_EXTRA_CA_CERTS; });
+beforeEach(() => {
+  jest.resetModules();
+  delete process.env.NODE_EXTRA_CA_CERTS;
+});
 afterEach(() => {
   jest.dontMock('node:tls');
   jest.dontMock('node:fs');
@@ -103,6 +122,43 @@ afterEach(() => {
   else process.env.SSL_CERT_FILE = originalSslCertFile;
   if (originalSslCertDir === undefined) delete process.env.SSL_CERT_DIR;
   else process.env.SSL_CERT_DIR = originalSslCertDir;
+});
+
+test('checks and reads each hashed CA through the same opened descriptor', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const f = load({ legacy: true, opensslFile: trusted, opensslDirectory: '/openssl-certs',
+    opensslDirectoryCertificate: trusted });
+  expect(f.open).toHaveBeenCalledWith('/openssl-certs/deadbeef.0', constants.O_RDONLY | constants.O_NONBLOCK);
+  expect(f.inspect).toHaveBeenCalledWith(42);
+  expect(f.read).toHaveBeenCalledWith(42, 'utf8');
+  expect(f.read).not.toHaveBeenCalledWith('/openssl-certs/deadbeef.0', 'utf8');
+  expect(f.close).toHaveBeenCalledWith(42);
+});
+
+test.each(['stat', 'read'])('closes the hashed CA descriptor when %s fails', source => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const error = Object.assign(new Error('hashed CA I/O failed'), { code: 'EIO' });
+  expect(() => load({
+    legacy: true, opensslFile: trusted, opensslDirectory: '/openssl-certs',
+    opensslCertificateError: source === 'stat' ? error : undefined,
+    opensslCertificateReadError: source === 'read' ? error : undefined,
+  })).toThrow('hashed CA I/O failed');
+  expect(jest.requireMock<typeof import('node:fs')>('node:fs').closeSync).toHaveBeenCalledWith(42);
+});
+
+test('closes but never reads a non-regular hashed CA entry', () => {
+  process.env.NODE_OPTIONS = '--use-openssl-ca';
+  process.env.SSL_CERT_FILE = '/openssl-ca.pem';
+  process.env.SSL_CERT_DIR = '/openssl-certs';
+  const f = load({ legacy: true, opensslFile: trusted, opensslDirectory: '/openssl-certs',
+    opensslDirectoryEntryIsFile: false });
+  expect(f.open).toHaveBeenCalled();
+  expect(f.read).not.toHaveBeenCalledWith(42, 'utf8');
+  expect(f.close).toHaveBeenCalledWith(42);
 });
 
 test('filters modern defaults and extra roots and installs the policy only once', () => {
@@ -127,18 +183,20 @@ test.each([false, true])('default and null CA options use sanitized defaults (le
   expect(f.setDefaultCACertificates).toHaveBeenCalledTimes(legacy ? 0 : 1);
 });
 
-test('legacy Node preserves OpenSSL-selected CA sources instead of bundled roots', () => {
+test.each([false, true])('preserves OpenSSL-selected CA sources instead of bundled roots (legacy=%s)', legacy => {
   process.env.NODE_OPTIONS = '--use-openssl-ca';
   process.env.SSL_CERT_FILE = '/openssl-ca.pem';
   process.env.SSL_CERT_DIR = '/openssl-certs';
   const f = load({
-    legacy: true,
+    legacy,
     opensslFile: blocked,
     opensslDirectory: '/openssl-certs',
     opensslDirectoryCertificate: trusted,
   });
   expect(f.read).toHaveBeenCalledWith('/openssl-ca.pem', 'utf8');
-  expect(f.read).toHaveBeenCalledWith('/openssl-certs/deadbeef.0', 'utf8');
+  expect(f.getCACertificates).not.toHaveBeenCalled();
+  expect(f.open).toHaveBeenCalledWith('/openssl-certs/deadbeef.0', constants.O_RDONLY | constants.O_NONBLOCK);
+  expect(f.read).toHaveBeenCalledWith(42, 'utf8');
   f.tls.createSecureContext();
   expect(f.createSecureContext).toHaveBeenCalledWith({ ca: [trusted] });
 });

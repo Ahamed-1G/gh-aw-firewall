@@ -1,6 +1,6 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
 
@@ -65,7 +65,13 @@ function readSelectedOpenSslCertificates(): string[] {
       if (!/^[a-f0-9]{8}\.\d+$/i.test(entry)) continue;
       const candidate = path.join(dir, entry);
       try {
-        if (statSync(candidate).isFile()) certificates.push(readFileSync(candidate, 'utf8'));
+        // Pin the check/read to one handle without blocking on an unexpected FIFO.
+        const descriptor = openSync(candidate, constants.O_RDONLY | constants.O_NONBLOCK);
+        try {
+          if (fstatSync(descriptor).isFile()) certificates.push(readFileSync(descriptor, 'utf8'));
+        } finally {
+          closeSync(descriptor);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
@@ -105,9 +111,9 @@ export function applyTlsTrustPolicy(): void {
   const usesOpenSslCa = /(?:^|\s)--use-openssl-ca(?:\s|$)/.test(
     `${process.execArgv.join(' ')} ${process.env.NODE_OPTIONS || ''}`,
   );
-  const defaults = tls.getCACertificates
-    ? [...tls.getCACertificates('default')]
-    : usesOpenSslCa ? readSelectedOpenSslCertificates() : [...tls.rootCertificates];
+  const defaults = usesOpenSslCa
+    ? readSelectedOpenSslCertificates()
+    : tls.getCACertificates ? [...tls.getCACertificates('default')] : [...tls.rootCertificates];
   // Read explicitly as well: Node otherwise warns and ignores malformed or
   // missing NODE_EXTRA_CA_CERTS, which must not silently defeat private trust.
   if (process.env.NODE_EXTRA_CA_CERTS) {

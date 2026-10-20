@@ -77,8 +77,15 @@ function readSelectedOpenSslCertificates() {
                 continue;
             const candidate = node_path_1.default.join(dir, entry);
             try {
-                if ((0, node_fs_1.statSync)(candidate).isFile())
-                    certificates.push((0, node_fs_1.readFileSync)(candidate, 'utf8'));
+                // Pin the check/read to one handle without blocking on an unexpected FIFO.
+                const descriptor = (0, node_fs_1.openSync)(candidate, node_fs_1.constants.O_RDONLY | node_fs_1.constants.O_NONBLOCK);
+                try {
+                    if ((0, node_fs_1.fstatSync)(descriptor).isFile())
+                        certificates.push((0, node_fs_1.readFileSync)(descriptor, 'utf8'));
+                }
+                finally {
+                    (0, node_fs_1.closeSync)(descriptor);
+                }
             }
             catch (error) {
                 if (error.code !== 'ENOENT')
@@ -115,9 +122,9 @@ function applyTlsTrustPolicy() {
     if (installed)
         return;
     const usesOpenSslCa = /(?:^|\s)--use-openssl-ca(?:\s|$)/.test(`${process.execArgv.join(' ')} ${process.env.NODE_OPTIONS || ''}`);
-    const defaults = node_tls_1.default.getCACertificates
-        ? [...node_tls_1.default.getCACertificates('default')]
-        : usesOpenSslCa ? readSelectedOpenSslCertificates() : [...node_tls_1.default.rootCertificates];
+    const defaults = usesOpenSslCa
+        ? readSelectedOpenSslCertificates()
+        : node_tls_1.default.getCACertificates ? [...node_tls_1.default.getCACertificates('default')] : [...node_tls_1.default.rootCertificates];
     // Read explicitly as well: Node otherwise warns and ignores malformed or
     // missing NODE_EXTRA_CA_CERTS, which must not silently defeat private trust.
     if (process.env.NODE_EXTRA_CA_CERTS) {
