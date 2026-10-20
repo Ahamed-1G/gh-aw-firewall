@@ -90,6 +90,7 @@ See [GitHub Actions](docs/github_actions.md) for advanced setup and `awf logs su
 - [Environment variables](docs/environment.md) — passing environment variables to containers
 - [Logging quick reference](docs/logging_quickref.md) and [Squid log filtering](docs/squid_log_filtering.md) — view and filter traffic
 - [Security model](docs/security.md) — what the firewall protects and how
+- [Emergency CA distrust](docs/security-ca-trust.md) — compromised CA mitigations, rollout, and runtime trust boundaries
 - [Architecture](docs/architecture.md) — how Squid, Docker, and iptables fit together
 - [Filesystem Sharing Contract](docs/filesystem-sharing-contract.md) — component identities, host permissions, generated access inventory, and runtime verification
 - [Compatibility](docs/compatibility.md) — supported Node.js, OS, and Docker versions

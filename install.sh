@@ -3,27 +3,30 @@ set -e
 
 # Install script for awf (Agentic Workflow Firewall)
 # 
-# This script downloads, verifies, and installs the awf binary with SHA256 validation
-# to protect against corrupted or tampered downloads.
+# This script authenticates release provenance before installing the awf binary.
+# Obtain this installer and the gh verifier through an independently trusted channel;
+# piping an unauthenticated HTTPS download into a shell cannot authenticate itself.
 #
-# Usage:
+# Usage (after independently authenticating this script and gh):
 #   # Install latest version
-#   curl -sSL https://raw.githubusercontent.com/github/gh-aw-firewall/main/install.sh | sudo bash
+#   sudo bash ./install.sh
 #
 #   # Install specific version
-#   curl -sSL https://raw.githubusercontent.com/github/gh-aw-firewall/main/install.sh | sudo bash -s -- v1.0.0
+#   sudo bash ./install.sh v1.0.0
 #
 #   # Or with environment variable
-#   curl -sSL https://raw.githubusercontent.com/github/gh-aw-firewall/main/install.sh | sudo AWF_VERSION=v1.0.0 bash
+#   sudo AWF_VERSION=v1.0.0 bash ./install.sh
 #
 # Security features:
 #   - Uses curl -f to fail on HTTP errors (404, 403, etc.)
-#   - Verifies SHA256 checksum from official checksums.txt
+#   - Requires GitHub artifact attestations from the release workflow
+#   - Authenticates the requested tag and checksums before checking the payload
 #   - Validates downloaded file is a valid ELF executable
 #   - Detects HTML error pages that may slip through
 #
 # Requirements:
 #   - curl
+#   - A trusted gh CLI with attestation verify support (and GitHub authentication)
 #   - sha256sum
 #   - file
 #   - sudo/root access
@@ -81,7 +84,7 @@ sha256_portable() {
 check_requirements() {
     local missing=()
 
-    for cmd in curl file; do
+    for cmd in curl file gh; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
@@ -95,6 +98,12 @@ check_requirements() {
     if [ ${#missing[@]} -ne 0 ]; then
         error "Missing required commands: ${missing[*]}"
         error "Please install them and try again"
+        exit 1
+    fi
+
+    if ! gh attestation verify --help 2>/dev/null | grep -q -- '--signer-workflow'; then
+        error "A trusted gh CLI with 'attestation verify --signer-workflow' support is required"
+        error "Install or upgrade gh through an independently authenticated channel"
         exit 1
     fi
 }
@@ -205,6 +214,7 @@ set_version() {
     else
         get_latest_version
     fi
+    validate_version "$VERSION"
 }
 
 # Download file
@@ -218,6 +228,9 @@ download_file() {
     if ! curl -fsSL "$url" -o "$output"; then
         error "Failed to download $url"
         error "Please check if the release exists and try again"
+        if [ "$(basename "$output")" = "release-identity.txt" ]; then
+            error "Legacy releases without attested release identity metadata are not supported"
+        fi
         exit 1
     fi
     
@@ -235,6 +248,37 @@ download_file() {
         rm -f "$output"
         exit 1
     fi
+}
+
+# A checksum fetched over the same TLS connection as a payload is not authentication.
+verify_provenance() {
+    local asset="$1"
+    if ! gh attestation verify "$asset" \
+        --hostname github.com \
+        --repo "$REPO" \
+        --signer-workflow "${REPO}/.github/workflows/release.yml" \
+        --cert-oidc-issuer https://token.actions.githubusercontent.com \
+        --deny-self-hosted-runners; then
+        error "Release provenance verification failed for $(basename "$asset")"
+        error "An attested release and a trusted, authenticated gh CLI are required; legacy unattested releases are not supported"
+        exit 1
+    fi
+}
+
+# The release workflow is dispatched on a branch and checks out a new tag.
+# Its certificate therefore identifies the dispatch branch, not the checkout tag.
+# Authenticate the signed tag-to-checksums binding instead of trusting TLS metadata.
+verify_release_identity() {
+    local checksums_file="$1"
+    local identity_file="$2"
+    verify_provenance "$identity_file"
+    local expected_identity
+    expected_identity="$(sha256_portable "$checksums_file")  refs/tags/${VERSION}"
+    if [ "$(cat "$identity_file")" != "$expected_identity" ]; then
+        error "Release identity does not bind checksums.txt to refs/tags/${VERSION}"
+        exit 1
+    fi
+    verify_provenance "$checksums_file"
 }
 
 # Verify checksum
@@ -307,6 +351,9 @@ main() {
     # Download URLs
     BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
     CHECKSUMS_URL="${BASE_URL}/checksums.txt"
+    download_file "$CHECKSUMS_URL" "$TEMP_DIR/checksums.txt"
+    download_file "${BASE_URL}/release-identity.txt" "$TEMP_DIR/release-identity.txt"
+    verify_release_identity "$TEMP_DIR/checksums.txt" "$TEMP_DIR/release-identity.txt"
 
     if [ "$USE_BUNDLE" = true ]; then
         # Lightweight bundle path — requires Node.js >= 20
@@ -314,7 +361,7 @@ main() {
         ASSET_URL="${BASE_URL}/${ASSET_NAME}"
 
         download_file "$ASSET_URL" "$TEMP_DIR/$ASSET_NAME"
-        download_file "$CHECKSUMS_URL" "$TEMP_DIR/checksums.txt"
+        verify_provenance "$TEMP_DIR/$ASSET_NAME"
 
         # Verify checksum (reuse BINARY_NAME for the checksum lookup)
         BINARY_NAME="$ASSET_NAME"
@@ -338,7 +385,7 @@ main() {
 
         # Download binary and checksums
         download_file "$BINARY_URL" "$TEMP_DIR/$BINARY_NAME"
-        download_file "$CHECKSUMS_URL" "$TEMP_DIR/checksums.txt"
+        verify_provenance "$TEMP_DIR/$BINARY_NAME"
 
         # Verify checksum
         verify_checksum "$TEMP_DIR/$BINARY_NAME" "$TEMP_DIR/checksums.txt"
