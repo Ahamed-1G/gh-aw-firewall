@@ -81,6 +81,17 @@ export function applyGeneralWorkflowPatches(
 ): PatchResult {
   const log: string[] = [];
 
+  if (/(?:^|[/\\])smoke-copilot-byok-aoai-(?:apikey|entra)\.lock\.yml$/.test(workflowPath)) {
+    const pricingCommand = 'node "${GITHUB_WORKSPACE}/scripts/ci/configure-aoai-smoke-pricing.cjs" ' +
+      '"${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json';
+    if (!content.includes(pricingCommand)) {
+      const configCopy = /^([ \t]*)cp "\$\{RUNNER_TEMP\}\/gh-aw\/awf-config\.json" \/tmp\/gh-aw\/awf-config\.json$/m;
+      if (!configCopy.test(content)) throw new Error(`Missing AWF config staging in Azure BYOK smoke: ${workflowPath}`);
+      content = content.replace(configCopy, (match, indent: string) => `${match}\n${indent}${pricingCommand}`);
+      log.push('  Configured workflow-scoped Azure deployment pricing without changing budget limits');
+    }
+  }
+
   if (workflowPath.endsWith('smoke-enclave-issues-read.lock.yml')) {
     const original = content;
     content = content
