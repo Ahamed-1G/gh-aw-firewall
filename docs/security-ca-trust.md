@@ -85,8 +85,9 @@ they cannot be established by the offline tests alone.
 
 ## Regression checks
 
-Run `npm test -- scripts/security/ca-trust.test.ts` for the policy, generated-copy,
-image-wiring, and offline TLS regressions. The dependency-free runtime smoke,
+Run `npm test -- src/tls-trust-policy.test.ts scripts/security/ca-trust.test.ts`
+for the policy, generated-copy, image-wiring, and offline TLS regressions.
+The dependency-free runtime smoke,
 `node --test scripts/security/tls-runtime-smoke.cjs`, can also run directly inside
 each rebuilt Node image with the repository mounted at `/work`; it needs
 OpenSSL and the image's installed Node launcher.
