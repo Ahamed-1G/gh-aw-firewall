@@ -166,8 +166,8 @@ with `[REDACTED]` and remove user info from OTLP endpoint URLs.
 
 **Correlation.** With export on, the router's `SERVER` span for each call is a child of the
 api-proxy's `api_proxy.router.<operation>` span, so both appear in the workflow's trace. Each
-router `request` log record carries the `trace_id` and `span_id` of that span, even without
-export configured. Before removing containers, AWF stops the router and saves its stdout and
+router `request` log record carries the `trace_id` and `span_id` of that span. Log retention
+doesn't require export. Before removing containers, AWF stops the router and saves its stdout and
 stderr, including shutdown records, in `router-logs/router.jsonl` under `logging.proxyLogsDir`
 (otherwise `/tmp/router-logs-<ts>/router.jsonl`). The directory is `0700` and the file `0600`,
 owned by the invoking user, including under `sudo`. Capture is best-effort, bounded to five

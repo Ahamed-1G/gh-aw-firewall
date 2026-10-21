@@ -15,16 +15,6 @@ export interface RouterLogCaptureOptions {
   sessionState?: string;
 }
 
-export function captureRouterLogs(
-  workDir: string,
-  routerLogs: string,
-  unsafeDirectories: { audit?: string; sessionState?: string } = {},
-): Promise<void> {
-  return stopAndCaptureRouterLogs(workDir, {
-    routerLogs, auditDir: unsafeDirectories.audit, sessionState: unsafeDirectories.sessionState,
-  });
-}
-
 function canonicalPath(candidate: string): string {
   const missing: string[] = [];
   let current = path.resolve(candidate);
@@ -94,7 +84,7 @@ function secureLogFile(directory: string, descriptors: number[]): number {
     const stat = fs.fstatSync(parent);
     if (created || index === components.length - 1) {
       if (stat.uid !== process.getuid?.() && stat.uid !== uid) throw new Error('Router log directory has an unsafe owner');
-      fs.fchmodSync(parent, stat.mode & 0o700);
+      fs.fchmodSync(parent, 0o700);
       fs.fchownSync(parent, uid, gid);
     }
   }
@@ -105,7 +95,7 @@ function secureLogFile(directory: string, descriptors: number[]): number {
   if (!stat.isFile() || stat.nlink !== 1 || (stat.uid !== process.getuid?.() && stat.uid !== uid)) {
     throw new Error('Refusing unsafe router log file (owner, hardlink, or nonregular file)');
   }
-  fs.fchmodSync(fd, stat.mode & 0o600);
+  fs.fchmodSync(fd, 0o600);
   fs.fchownSync(fd, uid, gid);
   fs.ftruncateSync(fd, 0);
   return fd;
@@ -146,12 +136,15 @@ export async function stopAndCaptureRouterLogs(
     }
     const destination = path.resolve(options.routerLogs);
     const unsafeDirs = [
-      options.auditDir ?? path.join(workDir, 'audit'),
-      options.sessionState ?? path.join(workDir, 'agent-session-state'),
-    ];
+      path.join(workDir, 'audit'),
+      path.join(workDir, 'agent-session-state'),
+      path.join(workDir, 'diagnostics'),
+      options.auditDir,
+      options.sessionState,
+    ].filter((directory): directory is string => directory !== undefined);
     for (const unsafe of unsafeDirs) {
       if (overlaps(canonicalPath(destination), canonicalPath(unsafe))) {
-        throw new Error('Router log directory overlaps audit or session-state artifacts');
+        throw new Error('Router log directory overlaps audit, session-state, or diagnostics artifacts; skipping capture to preserve private permissions');
       }
     }
     const fd = secureLogFile(destination, descriptors);

@@ -2381,7 +2381,7 @@ The production router writes operational JSONL records, including request `trace
 
 Capture is best-effort with a five-second overall deadline and a 16 MiB file limit.
 Failures or truncation produce warnings without failing teardown. Symlinked path components,
-non-regular or hard-linked output files, and paths overlapping audit or session-state
+non-regular or hard-linked output files, and paths overlapping audit, session-state, or failure-diagnostics
 directories are refused. Router logs are never copied into world-readable failure diagnostics.
 
 #### API Proxy Logs

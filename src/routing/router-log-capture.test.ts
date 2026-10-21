@@ -1,8 +1,8 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import execa from 'execa';
-import { captureRouterLogs, stopAndCaptureRouterLogs, ROUTER_LOG_MAX_BYTES } from './router-log-capture';
+import { stopAndCaptureRouterLogs, ROUTER_LOG_MAX_BYTES } from './router-log-capture';
 import { resolveArtifactOwner } from '../resolved-config-artifact';
 import { logger } from '../logger';
 
@@ -12,6 +12,14 @@ jest.mock('../logger', () => ({ logger: { debug: jest.fn(), warn: jest.fn() } })
 const actualExeca = jest.requireActual('execa') as typeof execa;
 const mockedExeca = execa as jest.MockedFunction<typeof execa>;
 const id = 'a'.repeat(64);
+const captureRouterLogs = (
+  workDir: string,
+  routerLogs: string,
+  unsafeDirs: { audit?: string; sessionState?: string },
+): Promise<void> => stopAndCaptureRouterLogs(workDir, {
+  routerLogs, auditDir: unsafeDirs.audit, sessionState: unsafeDirs.sessionState,
+});
+
 describe('stopAndCaptureRouterLogs', () => {
   let root: string;
   let workDir: string;
@@ -23,8 +31,7 @@ describe('stopAndCaptureRouterLogs', () => {
     jest.clearAllMocks();
     previousProject = process.env.COMPOSE_PROJECT_NAME;
     delete process.env.COMPOSE_PROJECT_NAME;
-    root = path.join(process.cwd(), `.router-log-capture-tests-${randomUUID()}`);
-    fs.mkdirSync(root, { mode: 0o700 });
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'router-log-capture-tests-'));
     workDir = path.join(root, 'awf-project');
     fs.mkdirSync(workDir);
     fs.writeFileSync(path.join(workDir, 'docker-compose.yml'), 'services: {}\n');
@@ -218,11 +225,32 @@ describe('stopAndCaptureRouterLogs', () => {
     expect(fs.existsSync(path.join(destination, 'router.jsonl'))).toBe(false);
   });
 
-  it.each(['audit', 'agent-session-state'])('guards the default %s directory when options omit it', async protectedName => {
+  it.each(['audit', 'agent-session-state', 'diagnostics'])('guards the default %s directory when options omit it', async protectedName => {
     destination = path.join(workDir, protectedName, 'router-logs');
     await stopAndCaptureRouterLogs(workDir, { routerLogs: destination });
     expect(fs.existsSync(destination)).toBe(false);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it.each(['audit', 'agent-session-state'])('still guards default %s when custom directories are configured', async protectedName => {
+    destination = path.join(workDir, protectedName, 'router-logs');
+    await stopAndCaptureRouterLogs(workDir, {
+      routerLogs: destination,
+      auditDir: path.join(root, 'custom-audit'),
+      sessionState: path.join(root, 'custom-session'),
+    });
+    expect(fs.existsSync(destination)).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('refuses a diagnostics symlink alias before exposing router logs to recursive publication', async () => {
+    fs.mkdirSync(destination);
+    fs.symlinkSync(destination, path.join(workDir, 'diagnostics'));
+    await stopAndCaptureRouterLogs(workDir, { routerLogs: destination });
+    expect(fs.existsSync(path.join(destination, 'router.jsonl'))).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      message: expect.stringContaining('diagnostics'),
+    }));
   });
 
   it('uses the strict sudo identity without a safe-UID fallback', async () => {
@@ -271,12 +299,14 @@ describe('stopAndCaptureRouterLogs', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it('never broadens existing restrictive modes', async () => {
+  it('repairs restrictive modes to exact private directory and file modes', async () => {
     fs.mkdirSync(destination, { mode: 0o700 });
     const file = path.join(destination, 'router.jsonl');
-    fs.writeFileSync(file, 'old', { mode: 0o200 });
+    fs.writeFileSync(file, 'old', { mode: process.getuid?.() === 0 ? 0o400 : 0o200 });
+    fs.chmodSync(destination, 0o500);
     await captureRouterLogs(workDir, destination, {});
-    expect(fs.statSync(file).mode & 0o777).toBe(0o200);
+    expect(fs.statSync(destination).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it('rejects a log directory owned by a foreign user', async () => {

@@ -414,7 +414,7 @@ successful and failed routed runs. Without `--proxy-logs-dir`, they are preserve
 `/tmp/router-logs-<ts>/router.jsonl`. The invoking user owns the `0700` directory and `0600`
 file, including when AWF runs under `sudo`. Capture is limited to 16 MiB and five seconds;
 warnings identify incomplete captures, whose partial files remain available. Unsafe paths,
-including symlinks and audit/session-state overlaps, are refused. Router logs are not copied
+including symlinks and audit/session-state/failure-diagnostics overlaps, are refused. Router logs are not copied
 into public diagnostics. Request records contain `trace_id` and `span_id` for correlation;
 `usage/aw_session.jsonl` model-routing outcomes are unchanged.
 

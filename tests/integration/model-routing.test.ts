@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import execa = require('execa');
 import * as yaml from 'js-yaml';
@@ -446,7 +447,7 @@ describe('Model routing', () => {
     received.filter(e => e.signal === 'metrics').flatMap(e => (e.items ?? []).map(item => item.name));
 
   beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(process.cwd(), '.awf-routing-integration-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-routing-integration-'));
     collectorDir = path.join(tempDir, 'collector');
     fs.mkdirSync(collectorDir, { mode: 0o755 });
     fs.writeFileSync(path.join(collectorDir, 'collector.js'), OTLP_COLLECTOR_SCRIPT, { mode: 0o644 });
