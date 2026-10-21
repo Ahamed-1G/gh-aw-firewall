@@ -1,4 +1,5 @@
-import * as fs from 'fs';
+import fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { PassThrough } from 'stream';
 import { normalizeEnclavesConfig } from '../parsers/enclave-parser';
@@ -23,6 +24,13 @@ import {
 } from './test-fixtures.test-utils';
 import * as cloudHypervisorManager from './manager';
 import { readHostExecutorInvocationDiagnostics } from '../enclave/host-executor-journal';
+import {
+  PRIMARY_READINESS_DIRECTORY,
+  PRIMARY_READINESS_FILENAME,
+  createPrimaryReadinessReporter,
+} from './primary-readiness';
+import { preserveCleanupArtifacts } from '../artifact-preservation';
+import { CloudHypervisorRetryableReadinessError } from './preflight';
 
 jest.mock('../enclave/cloud-hypervisor-host-service');
 jest.mock('../enclave/paths', () => {
@@ -199,6 +207,138 @@ describe('unified Cloud Hypervisor primary boot and enclave lifecycle', () => {
     });
     expect(fs.readFileSync(path.join(directory,
       'audit/diagnostics/cloud-hypervisor/host-executor', summary.name), 'utf8')).toBe(summary.contents);
+  });
+
+  function readPrimaryProgress(file: string) {
+    const descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const stat = fs.fstatSync(descriptor);
+      expect(stat.isFile()).toBe(true);
+      expect(stat.mode & 0o777).toBe(0o600);
+      return JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+
+  function primaryProgress() {
+    const file = path.join(directory, 'proxy-logs', PRIMARY_READINESS_DIRECTORY, PRIMARY_READINESS_FILENAME);
+    return readPrimaryProgress(file);
+  }
+
+  it('keeps readiness private across cleanup and relaunch with persistent proxy logs', () => {
+    const proxyLogsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-persistent-proxy-logs-'));
+    const readinessDir = path.join(proxyLogsDir, PRIMARY_READINESS_DIRECTORY);
+    try {
+      const first = createPrimaryReadinessReporter(readinessDir);
+      first.publish('ready', 'ready', 1, '/private/previous');
+      first.close();
+
+      preserveCleanupArtifacts(directory, { proxyLogsDir });
+
+      const file = path.join(readinessDir, PRIMARY_READINESS_FILENAME);
+      expect(readPrimaryProgress(file)).toMatchObject({ stage: 'ready', state: 'ready', bootAttempt: 1 });
+      const second = createPrimaryReadinessReporter(readinessDir);
+      second.publish('preflight', 'starting', 0);
+      second.close();
+      expect(readPrimaryProgress(file)).toMatchObject({
+        stage: 'preflight', state: 'starting', bootAttempt: 0,
+      });
+    } finally {
+      fs.rmSync(proxyLogsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes primary readiness only after boot, guest network, and connectivity checks', async () => {
+    await startCloudHypervisorEnclaveLifecycle(options.config, provider, {});
+    let finishProbe!: () => void;
+    const probeStarted = new Promise<void>((resolve) => {
+      manager.execute.mockImplementationOnce(async () => {
+        expect(primaryProgress()).toMatchObject({ stage: 'guest-network-readiness', state: 'starting' });
+        return { requestId: 'probe', exitCode: 0, signal: null, timedOut: false };
+      }).mockImplementationOnce(async () => {
+        expect(primaryProgress()).toMatchObject({ stage: 'guest-connectivity', state: 'starting' });
+        resolve();
+        await new Promise<void>((finish) => { finishProbe = finish; });
+        return { requestId: 'probe', exitCode: 0, signal: null, timedOut: false };
+      });
+    });
+    options.onInfrastructureReady = async () => {
+      expect(primaryProgress()).toMatchObject({
+        stage: 'compose-infrastructure', state: 'starting', runId: null, bootAttempt: 0,
+      });
+    };
+    const boot = runCloudHypervisorBootLoop(options);
+    await probeStarted;
+    expect(primaryProgress().state).toBe('starting');
+    finishProbe();
+    await boot;
+    expect(primaryProgress()).toEqual({
+      schemaVersion: 1, ownerPid: process.pid, stage: 'ready', state: 'ready',
+      bootAttempt: 1, runId: 'vm',
+    });
+  });
+
+  it('publishes terminal boot failure before cleanup without including exception or guest output', async () => {
+    await startCloudHypervisorEnclaveLifecycle(options.config, provider, {});
+    const secret = 'PRIVATE_BOOT_ERROR_SENTINEL';
+    manager.startInstance.mockRejectedValue(new Error(secret));
+    manager.stop.mockImplementation(async () => {
+      expect(primaryProgress()).toMatchObject({ stage: 'guest-boot', state: 'failed' });
+    });
+    await expect(runCloudHypervisorBootLoop(options)).rejects.toThrow(secret);
+    expect(primaryProgress()).toMatchObject({ stage: 'guest-boot', state: 'failed' });
+    expect(JSON.stringify(primaryProgress())).not.toContain(secret);
+  });
+
+  it('still tears down the VM before artifact cleanup when readiness publication persistently fails', async () => {
+    await startCloudHypervisorEnclaveLifecycle(options.config, provider, {});
+    const secret = 'PRIVATE_READINESS_IO_ERROR_SENTINEL';
+    let sync: jest.SpyInstance | undefined;
+    manager.startInstance.mockImplementationOnce(async () => {
+      sync = jest.spyOn(fs, 'fsyncSync').mockImplementation(() => {
+        throw new Error(secret);
+      });
+    });
+    manager.stop.mockImplementation(async () => { order.push('stop-primary'); });
+    options.cleanupArtifactSnapshot = jest.fn(async () => { order.push('cleanup-artifacts'); });
+    try {
+      await expect(runCloudHypervisorBootLoop(options)).rejects.toThrow(secret);
+    } finally {
+      sync?.mockRestore();
+    }
+    expect(manager.stop).toHaveBeenCalledTimes(1);
+    expect(order.slice(-2)).toEqual(['stop-primary', 'cleanup-artifacts']);
+    expect(options.cleanedManagers.has(manager)).toBe(true);
+    expect(dependencies.logger.warn).toHaveBeenCalledWith(
+      '[cloud-hypervisor] Primary readiness failure publication failed',
+    );
+  });
+
+  it('keeps retryable boot failure non-ready and reports readiness only for the successful attempt', async () => {
+    await startCloudHypervisorEnclaveLifecycle(options.config, provider, {});
+    manager.startInstance.mockRejectedValueOnce(new CloudHypervisorRetryableReadinessError(
+      'guest-network-readiness', 1, 'retryable boot failure',
+    ));
+    dependencies.sleep = jest.fn(async () => {
+      expect(primaryProgress()).toMatchObject({ state: 'starting', bootAttempt: 1 });
+    });
+    await runCloudHypervisorBootLoop(options);
+    expect(dependencies.sleep).toHaveBeenCalledTimes(1);
+    expect(primaryProgress()).toMatchObject({ state: 'ready', bootAttempt: 2 });
+  });
+
+  it('does not publish ready when shutdown races the last guest check', async () => {
+    await startCloudHypervisorEnclaveLifecycle(options.config, provider, {});
+    manager.execute.mockImplementation(async () => {
+      if (manager.execute.mock.calls.length === 2) stopped = true;
+      return { requestId: 'probe', exitCode: 0, signal: null, timedOut: false };
+    });
+    await runCloudHypervisorBootLoop(options);
+    expect(primaryProgress()).toMatchObject({ stage: 'guest-connectivity', state: 'failed' });
   });
 
   it.each(['missing', 'skipped', 'failed'] as const)(

@@ -27,6 +27,11 @@ import {
   probeGuestConnectivity,
   waitForGuestNetworkReady,
 } from './runtime-readiness';
+import {
+  createPrimaryReadinessReporter,
+  PRIMARY_READINESS_DIRECTORY,
+  type PrimaryBootStage,
+} from './primary-readiness';
 
 const CLOUD_HYPERVISOR_BOOT_RETRY_DELAYS_MS = [5_000, 10_000] as const;
 
@@ -85,7 +90,19 @@ export async function runCloudHypervisorBootLoop({
   failedBootDiagnostics,
   cleanedManagers,
 }: CloudHypervisorBootLoopOptions): Promise<CloudHypervisorBootLoopResult> {
-  let stage = 'preflight';
+  let stage: PrimaryBootStage = 'preflight';
+  let bootAttempt = 0;
+  let readiness: ReturnType<typeof createPrimaryReadinessReporter> | undefined;
+  const publish = (state: 'starting' | 'ready' | 'failed' = 'starting'): void => {
+    readiness?.publish(stage, state, bootAttempt, manager?.paths.runDirectory);
+  };
+  const publishFailure = (retry = false): void => {
+    try {
+      publish(retry ? 'starting' : 'failed');
+    } catch {
+      dependencies.logger.warn('[cloud-hypervisor] Primary readiness failure publication failed');
+    }
+  };
   let manager: CloudHypervisorManagerAdapter | undefined;
   let environment: Record<string, string> | undefined;
   let identity: { uid: number; gid: number } | undefined;
@@ -96,6 +113,13 @@ export async function runCloudHypervisorBootLoop({
     '[cloud-hypervisor] runtime=cloud-hypervisor maturity=preview fallback=disabled',
   );
   try {
+    if (config.enclaves?.enabled) {
+      readiness = createPrimaryReadinessReporter(path.join(
+        proxyLogsDir || path.join(workDir, 'proxy-logs'),
+        PRIMARY_READINESS_DIRECTORY,
+      ));
+    }
+    publish();
     await ensurePreflight();
     const preflightResult = getPreflightResult();
     if (!preflightResult) {
@@ -109,6 +133,7 @@ export async function runCloudHypervisorBootLoop({
     }
     let infrastructureReady = false;
     stage = 'compose-infrastructure';
+    publish();
     await dependencies.startInfrastructure(
       workDir,
       allowedDomains,
@@ -130,6 +155,7 @@ export async function runCloudHypervisorBootLoop({
       await assertCloudHypervisorEnclaveLifecycleReady(config);
     }
     stage = 'infrastructure-discovery';
+    publish();
     const cloudHypervisor = requireCloudHypervisorConfig(config);
     const verifiedCloudHypervisor = {
       ...cloudHypervisor,
@@ -146,6 +172,7 @@ export async function runCloudHypervisorBootLoop({
     );
     identity = dependencies.identity();
     stage = 'filesystem-write-policy';
+    publish();
     const resolvedExports = await dependencies.resolveExports(cloudHypervisor.mountPolicy);
     assertCloudHypervisorEnclaveExportsIsolated(config, resolvedExports);
     // Planned before the boot loop so an invalid or unmatched
@@ -190,9 +217,10 @@ export async function runCloudHypervisorBootLoop({
       );
     }
     stage = 'topology-revalidation';
+    publish();
     await infrastructure.revalidate();
     for (
-      let bootAttempt = 1;
+      bootAttempt = 1;
       bootAttempt <= CLOUD_HYPERVISOR_MAX_BOOT_ATTEMPTS;
       bootAttempt += 1
     ) {
@@ -223,6 +251,7 @@ export async function runCloudHypervisorBootLoop({
       publishManager(manager);
       try {
         stage = 'vmm-configuration';
+        publish();
         await manager.start();
         const {
           guestIp,
@@ -247,8 +276,10 @@ export async function runCloudHypervisorBootLoop({
           exports,
         );
         stage = 'guest-boot';
+        publish();
         await manager.startInstance();
         stage = 'guest-network-readiness';
+        publish();
         await waitForGuestNetworkReady({
           manager,
           environment,
@@ -256,6 +287,7 @@ export async function runCloudHypervisorBootLoop({
           bootAttempt,
         });
         stage = 'guest-connectivity';
+        publish();
         await probeGuestConnectivity({
           manager,
           environment,
@@ -267,10 +299,17 @@ export async function runCloudHypervisorBootLoop({
           captureGuestNetworkStateForDiagnostics: () =>
             captureGuestNetworkStateForDiagnostics({ manager, environment, identity }),
         });
-        dependencies.logger.info(
-          `[cloud-hypervisor] stage=ready boot-attempt=${bootAttempt}/` +
-          `${CLOUD_HYPERVISOR_MAX_BOOT_ATTEMPTS}`,
-        );
+        // The facade owns concurrent shutdown and deduplicates manager teardown.
+        if (isStopped()) {
+          publish('failed');
+        } else {
+          stage = 'ready';
+          publish('ready');
+          dependencies.logger.info(
+            `[cloud-hypervisor] stage=ready boot-attempt=${bootAttempt}/` +
+            `${CLOUD_HYPERVISOR_MAX_BOOT_ATTEMPTS}`,
+          );
+        }
         return {
           manager,
           environment,
@@ -284,6 +323,9 @@ export async function runCloudHypervisorBootLoop({
           formatError(error),
         );
         const finalAttempt = bootAttempt === CLOUD_HYPERVISOR_MAX_BOOT_ATTEMPTS;
+        const retry = error instanceof CloudHypervisorRetryableReadinessError
+          && !agentExecutionStarted() && !finalAttempt;
+        publishFailure(retry);
         const cleanupResult = await cleanupFailedBootAttempt({
           manager,
           bootAttempt,
@@ -303,11 +345,7 @@ export async function runCloudHypervisorBootLoop({
           diagnosticsCollected = true;
           markDiagnosticsCollected();
         }
-        if (
-          error instanceof CloudHypervisorRetryableReadinessError &&
-          !agentExecutionStarted() &&
-          !finalAttempt
-        ) {
+        if (retry) {
           continue;
         }
         if (error instanceof CloudHypervisorRetryableReadinessError) {
@@ -319,6 +357,7 @@ export async function runCloudHypervisorBootLoop({
       }
     }
   } catch (error) {
+    publishFailure();
     await cleanupArtifactSnapshot();
     if (!stopped) {
       dependencies.logger.warn(
@@ -326,6 +365,8 @@ export async function runCloudHypervisorBootLoop({
       );
     }
     throw error;
+  } finally {
+    readiness?.close();
   }
   throw new Error('Cloud Hypervisor boot loop exited without creating a manager');
 }
