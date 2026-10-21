@@ -743,8 +743,8 @@ copy_preload_libs() {
 }
 
 copy_browser_libs() {
-  # Stage the Chromium/Playwright runtime shared libraries baked into the image
-  # (containers/agent/Dockerfile: BROWSER_PKGS) so they are visible inside the
+  # Stage the Ubuntu 22.04 Chromium/Playwright runtime payload baked into the image
+  # (containers/agent/Dockerfile: browser-libs stage) so it is visible inside the
   # chroot. Installing the packages into the image's /usr is not sufficient on
   # its own: AWF_CHROOT_ENABLED=true chroots to /host, and buildSystemMounts()
   # bind-mounts the runner's own /usr, /lib, etc. over the image's, shadowing
@@ -755,21 +755,59 @@ copy_browser_libs() {
   # at /usr/local/share/awf/browser-libs.manifest. We copy each one, preserving
   # its original directory structure, under /run/awf-lib/browser-libs -- which
   # lives on the container's own writable rootfs (not bind-mounted) -- and point
-  # LD_LIBRARY_PATH at the resulting directories.
+  # LD_LIBRARY_PATH at the resulting directories. Keep the runner's existing
+  # libraries: overriding them with older GLib, etc. can break newer host tools.
   #
   # Sets BROWSER_LD_LIBRARY_PATH (empty string if unavailable or nothing to stage).
   BROWSER_LD_LIBRARY_PATH=""
   MANIFEST="/usr/local/share/awf/browser-libs.manifest"
+  SOURCE_ROOT="/usr/local/share/awf/browser-libs"
   if [ -s "$MANIFEST" ]; then
     STAGE_ROOT="/host/run/awf-lib/browser-libs"
     if mkdir -p "$STAGE_ROOT" 2>/dev/null; then
+      CHECK_MANIFEST="${STAGE_ROOT}/.manifest"
+      if ! cp "$MANIFEST" "$CHECK_MANIFEST" 2>/dev/null; then
+        echo "[entrypoint][WARN] Could not prepare browser runtime library lookup; Chromium/Playwright browsers may fail to launch" >&2
+        return
+      fi
+      if ! RUNNER_LIBS="$(chroot /host /bin/sh -c '
+        while IFS= read -r lib; do
+          if [ -e "$lib" ] || [ -L "$lib" ]; then
+            printf "path:%s\n" "$lib"
+          fi
+        done < "$1"
+        /sbin/ldconfig -p 2>/dev/null | while IFS= read -r line; do
+          set -f
+          set -- $line
+          if [ "$3" = "=>" ] && [ -f "$4" ] && [ -r "$4" ]; then
+            printf "name:%s\n" "$1"
+          fi
+        done
+      ' sh "/run/awf-lib/browser-libs/.manifest" 2>/dev/null)"; then
+        rm -f "$CHECK_MANIFEST"
+        echo "[entrypoint][WARN] Could not inspect runner browser libraries; Chromium/Playwright browsers may fail to launch" >&2
+        return
+      fi
+      rm -f "$CHECK_MANIFEST"
+      RUNNER_LIBS="
+${RUNNER_LIBS}
+"
       LIB_DIRS=""
       while IFS= read -r lib; do
         [ -z "$lib" ] && continue
-        [ -f "$lib" ] || continue
+        [ -f "${SOURCE_ROOT}${lib}" ] || continue
+        # Keep exact-path libraries (including plugins and masks), and avoid
+        # overriding a runner library resolved by soname from another directory.
+        case "$RUNNER_LIBS" in
+          *"
+path:$lib
+"*|*"
+name:${lib##*/}
+"*) continue ;;
+        esac
         dest="${STAGE_ROOT}${lib}"
         dest_dir="$(dirname "$dest")"
-        if mkdir -p "$dest_dir" 2>/dev/null && cp -a "$lib" "$dest" 2>/dev/null; then
+        if mkdir -p "$dest_dir" 2>/dev/null && cp -L "${SOURCE_ROOT}${lib}" "$dest" 2>/dev/null; then
           rel_dir="$(dirname "$lib")"
           case " $LIB_DIRS " in
             *" $rel_dir "*) ;;
