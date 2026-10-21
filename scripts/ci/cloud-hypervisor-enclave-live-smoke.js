@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { isDeepStrictEqual } = require('util');
+const conformanceDiagnostics = require('./cloud-hypervisor-enclave-diagnostics');
 
 const RELEASE_ASSETS = [
   'cloud-hypervisor-test-x86_64.tar.gz',
@@ -703,6 +704,17 @@ function startupDiagnostic(child, reason, stage, stderrFile, startupErrorFile) {
 
 function startupEvidence(child, reason, stage, stderrFile, startupErrorFile) {
   return collectStartupEvidence(child, reason, stage, stderrFile, startupErrorFile).evidence;
+}
+
+function startupSnapshot(child, reason, stage, profile, stderrFile, startupErrorFile) {
+  if (!['initial', 'recovery', 'script-only', 'agent-only'].includes(stage)
+      || !['combined', 'script-only', 'agent-only'].includes(profile)) {
+    throw new Error('Invalid public enclave startup snapshot identity');
+  }
+  return {
+    stage, profile,
+    ...collectStartupEvidence(child, reason, stage, stderrFile, startupErrorFile),
+  };
 }
 
 function emitStartupDiagnostic(child, reason, stage, stderrFile, startupErrorFile) {
@@ -1661,7 +1673,9 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
   const runDirectories = [workDir];
   let awfEnvironment;
   let primaryVmResidue;
-  const launchAwf = (stage) => {
+  let diagnosticContext;
+  const startupSnapshots = [];
+  const launchAwf = (stage, profile = stage === 'initial' || stage === 'recovery' ? 'combined' : stage) => {
     const awfArguments = [
       path.resolve(__dirname, '../../dist/cli.js'),
       '--config', awfConfigPath,
@@ -1674,7 +1688,27 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       '--',
       'while [ ! -f /workspace/.awf-enclave-live-stop ]; do sleep 1; done',
     ];
-    return spawnAwf(awfArguments, awfEnvironment, awfOut, awfErr, stage);
+    const startupErrorFile = path.join(workDir, 'proxy-logs', 'awf-startup-error.json');
+    let child;
+    try {
+      child = spawnAwf(awfArguments, awfEnvironment, awfOut, awfErr, stage);
+    } catch {
+      startupSnapshots.push(startupSnapshot(undefined, 'spawn-failure', stage, profile, awfErr, startupErrorFile));
+      throw new Error('Could not launch AWF before public enclave broker readiness');
+    }
+    const snapshot = { stage, profile, child, stderrFile: awfErr, startupErrorFile };
+    startupSnapshots.push(snapshot);
+    const capture = (reason) => {
+      if (snapshot.diagnostic) return;
+      Object.assign(snapshot, startupSnapshot(child, reason, stage, profile, awfErr, startupErrorFile));
+      delete snapshot.child;
+      delete snapshot.stderrFile;
+      delete snapshot.startupErrorFile;
+    };
+    child.once('exit', () => capture(failedSpawns.has(child) ? 'spawn-failure'
+      : child.signalCode ? 'signal' : 'exit'));
+    child.once('error', () => capture('spawn-failure'));
+    return child;
   };
   const stopComposeAfterCrash = (composeWorkDir = workDir) => run('docker', [
     'compose',
@@ -1703,6 +1737,9 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     fs.chmodSync(workspace, 0o755);
     fs.mkdirSync(path.join(workDir, 'audit'), { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.join(workDir, 'proxy-logs'), { recursive: true, mode: 0o700 });
+    diagnosticContext = conformanceDiagnostics.prepareForJob(
+      toAwfConfig(makeConfig(artifacts, workDir, workspace, {})), 'live',
+    );
     failureContext.stage = FAILURE_STAGES.GATEWAY;
     const handoff = startGatewayFixture({
       gatewayEnv, gatewayKey, capability, identity: gatewayIdentity,
@@ -1734,7 +1771,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       GITHUB_TOKEN: environment.GITHUB_TOKEN,
     };
     failureContext.stage = FAILURE_STAGES.BROKER;
-    awf = launchAwf('initial');
+    awf = launchAwf('initial', 'combined');
     await waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, {
       stage: 'initial', stderrFile: awfErr,
       startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
@@ -1998,7 +2035,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       awfConfigPath = path.join(root, 'awf-config-recovery.json');
       runDirectories.push(workDir);
       writeAwfConfig(workDir, awfConfigPath);
-      awf = launchAwf('recovery');
+      awf = launchAwf('recovery', 'combined');
       await waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, {
         stage: 'recovery', stderrFile: awfErr,
         startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
@@ -2072,7 +2109,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       awfConfigPath = path.join(root, `awf-config-${profile}.json`);
       runDirectories.push(workDir);
       writeAwfConfig(workDir, awfConfigPath, profile);
-      awf = launchAwf(profile);
+      awf = launchAwf(profile, profile);
       const diagnostics = {
         stage: profile, stderrFile: awfErr,
         startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
@@ -2157,6 +2194,30 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       process.exitCode = 1;
     } finally {
       try {
+        for (const snapshot of startupSnapshots) {
+          if (snapshot.diagnostic) continue;
+          const child = snapshot.child;
+          const reason = child && failedSpawns.has(child) ? 'spawn-failure'
+            : child?.signalCode ? 'signal' : child?.exitCode !== null && child?.exitCode !== undefined
+              ? 'exit' : 'unknown';
+          Object.assign(snapshot, startupSnapshot(
+            child, reason, snapshot.stage, snapshot.profile, snapshot.stderrFile, snapshot.startupErrorFile,
+          ));
+          delete snapshot.child;
+          delete snapshot.stderrFile;
+          delete snapshot.startupErrorFile;
+        }
+        conformanceDiagnostics.collect(diagnosticContext, {
+          status: acceptancePassed && !process.exitCode ? 'passed' : 'failed',
+          stage: Object.values(FAILURE_STAGES).includes(failureContext.stage) ? failureContext.stage : 'unknown stage',
+          startup: startupSnapshots.map(({ stage, profile, diagnostic, evidence }) =>
+            ({ stage, profile, diagnostic, evidence })),
+        });
+      } catch {
+        console.error('Could not retain public enclave conformance diagnostics; raw files will not be uploaded.');
+        process.exitCode = 1;
+      }
+      try {
         removePrivateAwfLogs(awfOut, awfErr, runDirectories.map(
           (directory) => path.join(directory, 'proxy-logs', 'awf-startup-error.json'),
         ));
@@ -2237,6 +2298,7 @@ module.exports = {
   readPrimaryVmProgress,
   verifyPrimaryVmIdentity,
   startupDiagnostic,
+  startupSnapshot,
   waitForBroker,
   waitForHostGatewayReadiness,
   failedSpawns,
