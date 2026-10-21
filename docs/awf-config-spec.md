@@ -246,6 +246,7 @@ AWF settings MAY be supplied via config files, including stdin (`--config -`).
 - `experimental.modelRouting` → *(config-only; experimental opt-in required for `apiProxy.routing`; defaults to off)*
 - `apiProxy.routing` → *(config-only; requires `experimental.modelRouting: true`; task-level routing objective and task conversation input)*
 - `apiProxy.routing.candidateModels` → *(optional glob patterns that limit router/classifier choices; intersected with the model policy; defaults to `apiProxy.allowedModels`)*
+- `apiProxy.routing.allowedEfforts` → *(optional reasoning-effort allowlist the consuming engine can run; removes other explicit-effort choices before ranking; defaults to every advertised effort)*
 - `apiProxy.modelRouter.providerType` → *(config-only; maps to `COPILOT_PROVIDER_TYPE`)*
 - `apiProxy.modelRouter.baseUrl` → *(config-only; maps to `COPILOT_PROVIDER_BASE_URL`)*
 - `apiProxy.allowedModels` → *(config-only; maps to `AWF_ALLOWED_MODELS` — JSON array of glob patterns; only matching models are permitted)*
@@ -2127,6 +2128,7 @@ apiProxy:
 |-------|----------------|-------------|
 | `provider` | `copilot` (default), `openai`, `anthropic` | Restricts routing to one configured native API-proxy provider; AWF does not switch credentials or translate across providers. |
 | `candidateModels` | non-empty array of model glob patterns | Limits router/classifier choices without widening the request policy; defaults to `apiProxy.allowedModels`. |
+| `allowedEfforts` | non-empty array of unique `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Efforts the consuming engine can run. Choices with any other explicit effort are removed before classification and ranking; defaults to every advertised effort. |
 | `objective.goal` | `cost`, `cost-speed` | Optimization goal used by the router |
 | `objective.mode` | `economy`, `balanced`, `robust`, `auto` | Fixed routing profile, or `auto` classification |
 | `task.conversationFile` | non-empty string | Host path to the task conversation whose description the router classifies |
@@ -2146,8 +2148,8 @@ task **description**, which the router classifies once per run. The resulting
 routing profile) selects the one model and effort the agent is seeded with for
 the whole run. The router is not invoked again per request or per sub-agent.
 
-The routing object is closed: `objective` and `task` are required, `provider`
-and `candidateModels` are optional, and unknown properties are rejected.
+The routing object is closed: `objective` and `task` are required, `provider`,
+`candidateModels`, and `allowedEfforts` are optional, and unknown properties are rejected.
 Omitting `provider` preserves Copilot routing. OpenAI and Anthropic routing
 require the matching provider to be configured for the agent and currently
 require the native `api.openai.com` or `api.anthropic.com` target; AWF does not
@@ -2183,6 +2185,20 @@ Completions protocol; Anthropic uses Messages. Unsupported effort values are
 discarded, and a model with no remaining advertised effort is excluded rather
 than converted into an effortless choice.
 
+`allowedEfforts` lets the caller state which efforts its engine can run (for
+example, Codex accepts `minimal` through `xhigh`). When it is set, AWF removes
+every choice whose explicit effort is not listed before it sends either the
+classifier or the route request, so the router never ranks an arm the engine
+would refuse. Model policy, catalogue, and protocol checks still apply, and AWF
+does not add efforts the provider does not advertise. An effortless choice
+(omitted effort, which is distinct from the explicit `none`) remains eligible.
+If the constraint removes every otherwise-eligible choice, routing fails with
+the non-retryable `no_route` code and a detail naming `routing.allowedEfforts`
+and its values. AWF never clamps the selected effort or restores an excluded
+choice. Omitting the field preserves the unconstrained pool. The applied list is
+recorded as `allowed_efforts` in classification, selection, and failure records
+and exposed by the `/reflect` `routing` field.
+
 Request guards and alias resolution use the provider-aware
 `allowedModels` / `disallowedModels` policy. Candidate filtering additionally
 uses `apiProxy.routing.candidateModels` when supplied; those patterns only
@@ -2217,6 +2233,8 @@ Every selection record MUST include:
 - `router` containing `name` and `version`;
 - `ranked_choices` in router preference order, each with `model` and `effort`;
 - the routing `objective` and configured `provider`;
+- `allowed_efforts`, the applied `apiProxy.routing.allowedEfforts` list, when
+  configured (also on classification and failure records);
 - `conversation_sha256`, the SHA-256 digest of the UTF-8 `JSON.stringify`
   serialization of the validated staged conversation;
 - `interaction_id` from the existing Copilot interaction-ID builder; and

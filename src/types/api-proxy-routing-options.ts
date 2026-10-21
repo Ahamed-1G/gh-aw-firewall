@@ -5,10 +5,13 @@
 export type ModelRoutingGoal = 'cost' | 'cost-speed';
 export type ModelRoutingMode = 'economy' | 'balanced' | 'robust' | 'auto';
 export type ModelRoutingProvider = 'copilot' | 'openai' | 'anthropic';
+export type ModelRoutingEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ModelRoutingConfig {
   provider?: ModelRoutingProvider;
   candidateModels?: string[];
+  /** Optional effort allowlist; explicit-effort choices outside it are removed before ranking. */
+  allowedEfforts?: ModelRoutingEffort[];
   objective: {
     goal: ModelRoutingGoal;
     mode: ModelRoutingMode;

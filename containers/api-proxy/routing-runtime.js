@@ -263,6 +263,16 @@ function createProductionRoutingSession({
     }
   }
 
+  // Reflected so an audit can explain why constrained arms never appear in ranked_choices.
+  // An invalid configuration is reported by the controller run instead.
+  let reflectedConstraint = {};
+  try {
+    const allowedEfforts = parseRoutingConfig(rawConfig)?.allowedEfforts;
+    if (allowedEfforts) reflectedConstraint = { allowed_efforts: Object.freeze([...allowedEfforts]) };
+  } catch {
+    // The controller publishes the configuration failure.
+  }
+
   const getSelection = () => result?.ok ? result.selection : null;
   const getFailure = () => terminalFailure || (result && !result.ok ? result.failure : null);
 
@@ -270,13 +280,14 @@ function createProductionRoutingSession({
   // model, effort, and endpoint from it, but may send any policy-permitted model.
   function getReflectState() {
     const failure = getFailure();
-    if (failure) return { status: 'failed', failure_code: failure.code, selection: null };
+    if (failure) return { status: 'failed', failure_code: failure.code, ...reflectedConstraint, selection: null };
     const selection = getSelection();
-    if (!selection) return { status: 'pending', selection: null };
+    if (!selection) return { status: 'pending', ...reflectedConstraint, selection: null };
     const provider = selection.provider || 'copilot';
     const effort = Object.hasOwn(selection.choice, 'effort') ? selection.choice.effort : null;
     return {
       status: 'selected',
+      ...reflectedConstraint,
       selection: {
         provider,
         model: selection.choice.model,

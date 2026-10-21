@@ -542,6 +542,24 @@
               },
               "description": "Optional model-pattern allowlist for router/classifier candidates. Candidates are still intersected with apiProxy.allowedModels and apiProxy.disallowedModels for policy enforcement. When omitted, apiProxy.allowedModels continues to supply the routing candidates."
             },
+            "allowedEfforts": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              },
+              "description": "Optional reasoning-effort allowlist supplied by the consuming engine. Candidate model/effort choices with an explicit effort outside this list are removed before classification and route ranking; choices without an effort remain eligible. When every otherwise-eligible choice is removed, routing fails with no_route. When omitted, every advertised effort remains eligible."
+            },
             "objective": {
               "type": "object",
               "additionalProperties": false,

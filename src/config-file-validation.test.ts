@@ -274,6 +274,25 @@ describe('validateAwfFileConfig', () => {
       .toContain('config.experimental.unknown is not supported');
   });
 
+  it('config_schema_rejects_unknown_constrained_effort', () => {
+    const routing = {
+      objective: { goal: 'cost', mode: 'auto' },
+      task: { conversationFile: '/tmp/gh-aw/conversation.json' },
+    };
+    const validate = (allowedEfforts: unknown) => validateAwfFileConfig({
+      experimental: { modelRouting: true },
+      apiProxy: { routing: { ...routing, allowedEfforts } },
+    });
+
+    expect(validate(['minimal', 'low', 'medium', 'high', 'xhigh'])).toEqual([]);
+    expect(validate(['none', 'max'])).toEqual([]);
+    expect(validate(['medium', 'ultra'])).toContain(
+      'config.apiProxy.routing.allowedEfforts.1 must be one of: none, minimal, low, medium, high, xhigh, max',
+    );
+    expect(validate([])).toContain('config.apiProxy.routing.allowedEfforts must NOT have fewer than 1 items');
+    expect(validate(['low', 'low'])).toEqual(expect.arrayContaining([expect.stringContaining('duplicate items')]));
+  });
+
   it('rejects non-object apiProxy.targets', () => {
     const errors = validateAwfFileConfig({ apiProxy: { targets: 'invalid' } });
     expect(errors).toContain('config.apiProxy.targets must be an object');

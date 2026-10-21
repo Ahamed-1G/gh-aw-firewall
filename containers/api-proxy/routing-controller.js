@@ -128,6 +128,10 @@ function createRoutingController(dependencies) {
       random,
     });
     let catalogueOverlap = null;
+    // Recorded so an audit can tell an arm excluded by the caller's effort constraint from one ranked lower.
+    const effortConstraint = Array.isArray(config?.allowedEfforts)
+      ? { allowed_efforts: [...config.allowedEfforts] }
+      : {};
 
     try {
       requireDependency(dependencies, 'planner', 'health');
@@ -154,7 +158,12 @@ function createRoutingController(dependencies) {
 
       const snapshot = await runPhase(({ signal: phaseSignal }) =>
         catalogue.getSnapshot({ signal: phaseSignal, provider: config.provider || 'copilot' }));
-      const pool = buildRoutingCandidates({ catalogue: snapshot, policy, candidateModels: config.candidateModels });
+      const pool = buildRoutingCandidates({
+        catalogue: snapshot,
+        policy,
+        candidateModels: config.candidateModels,
+        allowedEfforts: config.allowedEfforts,
+      });
       catalogueOverlap = countCatalogueOverlap(rawCapabilities, pool.choices);
 
       const loadedConversation = await runPhase(({ signal: phaseSignal }) =>
@@ -199,6 +208,7 @@ function createRoutingController(dependencies) {
           attempt: actualAttempts,
           classifier_model: mapping.choice.model,
           classifier_effort: mapping.effort ?? null,
+          ...effortConstraint,
         });
         let result;
         try {
@@ -311,6 +321,7 @@ function createRoutingController(dependencies) {
         degraded_reason: degradedReason,
         classifier_attempts: actualAttempts,
         eligible_choices: pool.choices.length,
+        ...effortConstraint,
         catalogue_overlap: catalogueOverlap,
         latency_ms: Math.max(0, clock.now() - startedAt),
       });
@@ -332,6 +343,7 @@ function createRoutingController(dependencies) {
         code: failure.code,
         // Routing failure details are authored literals, already sanitized by toRoutingFailure.
         detail: failure.detail,
+        ...effortConstraint,
         catalogue_overlap: catalogueOverlap,
         latency_ms: Math.max(0, clock.now() - startedAt),
       });

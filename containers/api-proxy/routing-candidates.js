@@ -80,7 +80,7 @@ function makePairKey(model, effort) {
   return `${model.toLowerCase()}\u0000${effort === undefined ? '' : effort}`;
 }
 
-function buildRoutingCandidates({ catalogue, policy = {}, candidateModels }) {
+function buildRoutingCandidates({ catalogue, policy = {}, candidateModels, allowedEfforts }) {
   const provider = catalogue?.provider;
   const providerInfo = Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[provider] : null;
   if (!catalogue || !providerInfo || catalogue.configured !== true) {
@@ -131,9 +131,19 @@ function buildRoutingCandidates({ catalogue, policy = {}, candidateModels }) {
   if (pairs.length === 0) {
     throw createRoutingError('no_route', 'No available model and effort is supported for the selected provider');
   }
+  // An omitted effort is not the explicit `none`, so effortless choices are not constrained.
+  const eligiblePairs = Array.isArray(allowedEfforts)
+    ? pairs.filter(pair => pair.effort === undefined || allowedEfforts.includes(pair.effort))
+    : pairs;
+  if (eligiblePairs.length === 0) {
+    throw createRoutingError(
+      'no_route',
+      `The routing.allowedEfforts constraint (${allowedEfforts.join(', ')}) excludes every eligible model choice`,
+    );
+  }
 
   const byId = Object.create(null);
-  const choices = pairs.map((pair, index) => {
+  const choices = eligiblePairs.map((pair, index) => {
     const id = `choice-${String(index + 1).padStart(4, '0')}`;
     const choice = Object.freeze({
       id,
@@ -161,6 +171,7 @@ function buildRoutingCandidates({ catalogue, policy = {}, candidateModels }) {
 }
 
 module.exports = {
+  ROUTING_EFFORTS: EFFORTS,
   buildRoutingCandidates,
   getModelRoutingChoices,
   normalizePolicyList,

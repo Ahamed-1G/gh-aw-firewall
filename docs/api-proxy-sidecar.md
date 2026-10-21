@@ -885,7 +885,10 @@ the router selected for the run:
 ```
 
 `status` is `pending` until the router selects, `selected` afterwards, or
-`failed` (with `failure_code`) after a terminal routing failure. The selection
+`failed` (with `failure_code`) after a terminal routing failure. When
+`apiProxy.routing.allowedEfforts` is configured, every status also includes
+`allowed_efforts`, the effort constraint applied before ranking, so an audit can
+tell an excluded arm from one the router merely ranked lower. The selection
 is advisory: the agent/harness seeds its model from it by sending `wire_model`
 as the body `model` to `endpoint` (for `/responses`, `reasoning.effort` equal to
 `effort`; for `/v1/messages`, `output_config.effort` when `effort` is not

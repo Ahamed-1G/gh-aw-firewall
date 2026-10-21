@@ -10,7 +10,7 @@ const FIELDS = new Set([
   'objective', 'provider', 'selected_id', 'selected_model', 'selected_effort',
   'selected_provider', 'selected_endpoint', 'wire_model', 'endpoint',
   'degraded_classification', 'degraded_reason', 'classifier_attempts',
-  'eligible_choices', 'catalogue_overlap', 'latency_ms', 'labels', 'mode',
+  'eligible_choices', 'allowed_efforts', 'catalogue_overlap', 'latency_ms', 'labels', 'mode',
   'router', 'ranked_choices', 'conversation_sha256', 'phase', 'code', 'detail',
   'request_id', 'routed', 'deviations', 'unavailable', 'method', 'pathname',
   'requested_model', 'requested_effort', 'requested_endpoint', 'upstream_endpoint', 'outcome', 'status',

@@ -1,7 +1,7 @@
 'use strict';
 
 const { createRoutingError } = require('./routing-errors');
-const { normalizePolicyList } = require('./routing-candidates');
+const { normalizePolicyList, ROUTING_EFFORTS } = require('./routing-candidates');
 
 const ROUTING_GOALS = new Set(['cost', 'cost-speed']);
 const ROUTING_MODES = new Set(['economy', 'balanced', 'robust', 'auto']);
@@ -34,6 +34,24 @@ function requireNonblankString(value, path) {
   return value;
 }
 
+// Invalid efforts are rejected rather than dropped, so a typo cannot widen or empty the constraint silently.
+function parseAllowedEfforts(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw configurationError('routing.allowedEfforts must be a non-empty array');
+  }
+  const efforts = [];
+  for (const [index, effort] of value.entries()) {
+    if (!ROUTING_EFFORTS.has(effort)) {
+      throw configurationError(`routing.allowedEfforts[${index}] is not a supported effort`);
+    }
+    if (efforts.includes(effort)) {
+      throw configurationError(`routing.allowedEfforts[${index}] is a duplicate effort`);
+    }
+    efforts.push(effort);
+  }
+  return efforts;
+}
+
 function parseRoutingConfig(raw) {
   if (raw === undefined) return null;
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -47,7 +65,8 @@ function parseRoutingConfig(raw) {
     throw configurationError('AWF_ROUTING_CONFIG must contain valid JSON');
   }
 
-  requireClosedObject(value, 'routing', ['objective', 'task'], ['objective', 'task', 'provider', 'candidateModels']);
+  requireClosedObject(value, 'routing', ['objective', 'task'],
+    ['objective', 'task', 'provider', 'candidateModels', 'allowedEfforts']);
   requireClosedObject(value.objective, 'routing.objective', ['goal', 'mode']);
   requireClosedObject(value.task, 'routing.task', ['conversationFile']);
 
@@ -68,10 +87,15 @@ function parseRoutingConfig(raw) {
     }
     candidateModels = normalizePolicyList(value.candidateModels, 'routing.candidateModels');
   }
+  let allowedEfforts;
+  if (Object.hasOwn(value, 'allowedEfforts')) {
+    allowedEfforts = parseAllowedEfforts(value.allowedEfforts);
+  }
 
   const config = {
     provider,
     ...(candidateModels ? { candidateModels: Object.freeze(candidateModels) } : {}),
+    ...(allowedEfforts ? { allowedEfforts: Object.freeze(allowedEfforts) } : {}),
     objective: Object.freeze({
       goal: value.objective.goal,
       mode: value.objective.mode,
