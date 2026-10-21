@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { logger } from '../logger';
+import { resolveLogPaths } from '../log-paths';
 import { assertPersistentDebugArtifactsIsolated } from '../enclave/mount-policy';
 import {
   writeConfigs,
@@ -456,7 +457,16 @@ async function runCleanup(
         logger.warn('Failed to write the incomplete enclave audit marker.', error);
       }
     }
-    await stopContainers(config.workDir, config.keepContainers);
+    if (config.modelRouting) {
+      const logPaths = resolveLogPaths(config);
+      await stopContainers(config.workDir, config.keepContainers, {
+        routerLogs: logPaths.routerLogs,
+        auditDir: config.auditDir,
+        sessionState: logPaths.sessionState,
+      });
+    } else {
+      await stopContainers(config.workDir, config.keepContainers);
+    }
   }
 
   if (getHostIptablesSetup() && !config.keepContainers) {

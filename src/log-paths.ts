@@ -6,6 +6,7 @@ export interface LogPaths {
   sessionState: string;
   agentLogs: string;
   apiProxyLogs: string;
+  routerLogs: string;
   cliProxyLogs: string;
 }
 
@@ -22,6 +23,7 @@ export function resolveLogPaths(config: WrapperConfig): LogPaths {
     apiProxyLogs: config.proxyLogsDir
       ? path.join(config.proxyLogsDir, 'api-proxy-logs')
       : path.join(config.workDir, 'api-proxy-logs'),
+    routerLogs: path.join(config.proxyLogsDir || config.workDir, 'router-logs'),
     cliProxyLogs: config.proxyLogsDir
       ? path.join(config.proxyLogsDir, 'cli-proxy-logs')
       : path.join(config.workDir, 'cli-proxy-logs'),

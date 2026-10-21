@@ -3,6 +3,7 @@ import { logger } from './logger';
 import { getLocalDockerEnv } from './docker-host';
 import { getSafeHostGid, getSafeHostUid } from './host-identity';
 import { SQUID_CONTAINER_NAME } from './constants';
+import { stopAndCaptureRouterLogs, RouterLogCaptureOptions } from './routing/router-log-capture';
 
 /**
  * Runs `docker compose down -v -t 1` with the standard AWF options.
@@ -85,7 +86,11 @@ export async function fixSquidLogPermissions(): Promise<void> {
 /**
  * Stops and removes Docker Compose services
  */
-export async function stopContainers(workDir: string, keepContainers: boolean): Promise<void> {
+export async function stopContainers(
+  workDir: string,
+  keepContainers: boolean,
+  routerLogs?: RouterLogCaptureOptions,
+): Promise<void> {
   if (keepContainers) {
     logger.info('Keeping containers running (--keep-containers enabled)');
     return;
@@ -96,6 +101,14 @@ export async function stopContainers(workDir: string, keepContainers: boolean): 
   // Fix squid log ownership/permissions before compose down so log files are
   // readable after shutdown (e.g. for `awf logs summary` and artifact upload).
   await fixSquidLogPermissions();
+
+  if (routerLogs) {
+    try {
+      await stopAndCaptureRouterLogs(workDir, routerLogs);
+    } catch {
+      logger.warn('Router log capture failed; continuing container teardown.');
+    }
+  }
 
   try {
     await runComposeDown(workDir);

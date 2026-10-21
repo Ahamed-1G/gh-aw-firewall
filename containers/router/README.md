@@ -308,6 +308,15 @@ compose file redact collector headers and endpoint user info. See
 [OTEL Tracing in Sentry](https://github.com/github/gh-aw-firewall/blob/main/docs/otel-sentry.md#router-export)
 for details.
 
+AWF stops the router before the api-proxy and saves its Docker stdout and stderr,
+including shutdown records, to `<proxyLogsDir>/router-logs/router.jsonl` (or
+`/tmp/router-logs-<ts>/router.jsonl` without `proxyLogsDir`). This also happens on failed
+runs. The invoking user owns the directory (`0700`) and file (`0600`), including under
+`sudo`; the logs are never copied into public diagnostics. Capture is best-effort with
+a five-second deadline and a 16 MiB file limit. Incomplete captures warn and retain any
+partial file. Request `trace_id` and `span_id` correlate with the router's server spans
+without requiring export. Routing outcomes in `usage/aw_session.jsonl` are unchanged.
+
 **Spans.** Each request gets one `SERVER` span named `{method} {route}`, or just `{method}` for
 an unmatched path, except `GET /healthz` and requests rejected with a bare 503. Its attributes
 are `http.request.method`, `http.route` (matched paths only), `url.scheme`,

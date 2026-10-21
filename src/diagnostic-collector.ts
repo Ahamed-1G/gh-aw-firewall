@@ -40,6 +40,7 @@ export async function collectDiagnosticLogs(workDir: string): Promise<void> {
 
   logger.info('Collecting diagnostic logs...');
 
+  // Router logs remain owner-only; teardown captures them outside public diagnostics.
   const containers = [
     SQUID_CONTAINER_NAME,
     AGENT_CONTAINER_NAME,

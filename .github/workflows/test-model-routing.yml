@@ -29,6 +29,7 @@ on:
       - 'src/routing/**'
       - 'src/cli-workflow.ts'
       - 'src/compose-generator.ts'
+      - 'src/container-stop.ts'
       - 'src/commands/resolve-credentials.ts'
       - 'src/config-file.ts'
       - 'src/config-mapper.ts'
@@ -518,7 +519,7 @@ jobs:
           echo "::endgroup::"
           echo "ROUTED_DEVIATION_EXIT=0"
 
-      - name: Assert preserved routing selection and terminal request records
+      - name: Assert preserved routing records, router logs, and workflow trace
         run: |
           node <<'JS'
           const assert = require("node:assert/strict");
@@ -532,6 +533,16 @@ jobs:
           for (const target of ["selected", "other"]) {
             const reflected = JSON.parse(fs.readFileSync(path.join(root, `selection-${target}.json`), "utf8"));
             const logs = path.join(root, `logs-${target}`, "api-proxy-logs");
+            const routerFile = path.join(root, `logs-${target}`, "router-logs", "router.jsonl");
+            const routerStat = fs.statSync(routerFile);
+            assert.equal(routerStat.mode & 0o777, 0o600, "router log permissions are not private");
+            assert.equal(routerStat.uid, process.getuid(), "sudo did not restore router log ownership to the runner");
+            const routerRecords = readJsonl(routerFile);
+            assert.equal(routerRecords[0]?.msg, "starting", "router startup record was not preserved");
+            assert.equal(routerRecords.at(-1)?.msg, "stopped", "router shutdown record was not preserved");
+            const routerText = JSON.stringify(routerRecords);
+            assert.ok(!routerText.includes("Reply with exactly ROUTED_OK."), "router log captured prompt text");
+            assert.ok(!routerText.includes("This request must be blocked by model policy."), "router log captured rejected prompt text");
             const records = readJsonl(path.join(logs, "model-routing.jsonl"));
             for (const record of records) {
               assert.match(record._schema, /^model-routing\/v.+$/);
@@ -610,6 +621,26 @@ jobs:
               assert.equal(span.parentSpanId, "00f067aa0ba902b7", `${span.name} is not a child of the workflow span`);
               assert.equal(span.kind, 2, `${span.name} is not a CLIENT span`);
             }
+            const routerRequests = routerRecords.filter(record => record.msg === "request");
+            assert.ok(routerRequests.length > 0, "router request records were not preserved");
+            for (const request of routerRequests) {
+              const operation = request.route.slice(1);
+              const calls = spans.filter(span => span.name === `api_proxy.router.${operation}`);
+              assert.ok(calls.length > 0, `router ${request.route} has no api-proxy client span`);
+              assert.equal(request.trace_id, "4bf92f3577b34da6a3ce929d0e0e4736", "router request is not in the workflow trace");
+              assert.ok(calls.some(span => span.traceId === request.trace_id), "router request did not join its api-proxy call");
+              assert.equal(request.status, 200, "router request failed");
+              if (request.span_id !== undefined) {
+                assert.match(request.span_id, /^[a-f0-9]{16}$/);
+                assert.ok(calls.every(span => span.spanId !== request.span_id), "router reused the client's span ID");
+              }
+            }
+            for (const span of spans) {
+              const route = "/" + span.name.slice("api_proxy.router.".length);
+              assert.ok(routerRequests.some(request => request.route === route && request.trace_id === span.traceId),
+                `api-proxy ${span.name} has no matching router request`);
+            }
+            console.log(`ROUTER_LOGS=passed target=${target} requests=${routerRequests.length} mode=0600 uid=${routerStat.uid}`);
             const routeSpans = spans.filter(span => span.name === "api_proxy.router.route" && span.status?.code === 1);
             assert.equal(routeSpans.length, 1, "expected one successful route span per routed run");
             const routeAttributes = routeSpans[0].attributes;

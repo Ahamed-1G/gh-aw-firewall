@@ -389,6 +389,7 @@ All logs are written under the temporary work directory (`/tmp/awf-<timestamp>/`
 ├── agent-logs/          # Copilot CLI logs (owned by host UID:GID)
 ├── agent-session-state/ # Session events.jsonl (owned by host UID:GID)
 ├── api-proxy-logs/      # API proxy sidecar logs (mode 0777)
+├── router-logs/         # Routed runs: router.jsonl (directory 0700, file 0600)
 └── cli-proxy-logs/      # CLI proxy logs (mode 0777)
 ```
 
@@ -402,10 +403,20 @@ When `--proxy-logs-dir` is specified (e.g., in GitHub Actions for artifact uploa
 <proxy-logs-dir>/
 ├── access.log           # Squid writes DIRECTLY here (no subdirectory)
 ├── api-proxy-logs/      # API proxy logs in subdirectory
+├── router-logs/         # Routed runs: private router.jsonl, including shutdown
 └── cli-proxy-logs/      # CLI proxy logs in subdirectory
 ```
 
 **Note:** Squid logs write directly to `<proxy-logs-dir>` (not a `squid-logs/` subdirectory) for historical compatibility with GitHub Actions workflows that glob `<proxy-logs-dir>/access.log`. The api-proxy and cli-proxy logs use subdirectories to avoid filename collisions.
+
+Router logs are captured after stopping the router and before removing containers, on both
+successful and failed routed runs. Without `--proxy-logs-dir`, they are preserved at
+`/tmp/router-logs-<ts>/router.jsonl`. The invoking user owns the `0700` directory and `0600`
+file, including when AWF runs under `sudo`. Capture is limited to 16 MiB and five seconds;
+warnings identify incomplete captures, whose partial files remain available. Unsafe paths,
+including symlinks and audit/session-state overlaps, are refused. Router logs are not copied
+into public diagnostics. Request records contain `trace_id` and `span_id` for correlation;
+`usage/aw_session.jsonl` model-routing outcomes are unchanged.
 
 ### MCP Gateway Logs
 

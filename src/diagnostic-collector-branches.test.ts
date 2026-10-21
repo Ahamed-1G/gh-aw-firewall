@@ -28,6 +28,7 @@ import * as path from 'path';
 import { collectDiagnosticLogs } from './diagnostic-collector';
 import { sanitizeDockerComposeYaml } from './compose-sanitizer';
 import { mockExecaFn } from './test-helpers/mock-execa.test-utils';
+import { ROUTER_CONTAINER_NAME } from './constants';
 
 const actual = jest.requireActual<typeof import('fs')>('fs');
 const mockSanitize = sanitizeDockerComposeYaml as jest.MockedFunction<typeof sanitizeDockerComposeYaml>;
@@ -71,5 +72,15 @@ describe('collectDiagnosticLogs – uncovered branches', () => {
 
     const diagnosticsDir = path.join(tmpDir, 'diagnostics');
     expect(fs.existsSync(path.join(diagnosticsDir, 'docker-compose.yml'))).toBe(false);
+  });
+
+  it('never copies router logs into public diagnostics', async () => {
+    await collectDiagnosticLogs(tmpDir);
+
+    const logCommands = mockExecaFn.mock.calls.filter(([, args]) => args[0] === 'logs');
+    expect(logCommands.length).toBeGreaterThan(0);
+    for (const [, args] of logCommands) {
+      expect(args).not.toContain(ROUTER_CONTAINER_NAME);
+    }
   });
 });

@@ -2369,6 +2369,21 @@ Directory: configured by `logging.proxyLogsDir` (default: `<workDir>/squid-logs/
 | `audit.jsonl` | JSONL (`audit/v<version>` schema) | Structured version of access log; preferred for programmatic consumption | Yes |
 | `cache.log` | Squid native text | Squid internal diagnostics (startup, shutdown, errors) | Yes |
 
+#### Router Logs
+
+When model routing is enabled, teardown stops the router before the API proxy and saves its
+complete stdout and stderr, including shutdown records, to
+`<logging.proxyLogsDir>/router-logs/router.jsonl`. Without `proxyLogsDir`, the logs are
+preserved at `/tmp/router-logs-<ts>/router.jsonl`. The directory is `0700` and the file `0600`,
+owned by the invoking user (`SUDO_UID` under `sudo`); preservation never widens these modes.
+The production router writes operational JSONL records, including request `trace_id` and
+`span_id`, without conversation content. Custom router images need not honor that contract.
+
+Capture is best-effort with a five-second overall deadline and a 16 MiB file limit.
+Failures or truncation produce warnings without failing teardown. Symlinked path components,
+non-regular or hard-linked output files, and paths overlapping audit or session-state
+directories are refused. Router logs are never copied into world-readable failure diagnostics.
+
 #### API Proxy Logs
 
 Directory: configured by `apiProxy.logging.tokenLogDir` / `AWF_TOKEN_LOG_DIR`

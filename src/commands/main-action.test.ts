@@ -1500,6 +1500,32 @@ describe('createMainAction', () => {
       expect(mockedDockerManager.cleanup).toHaveBeenCalled();
     });
 
+    it.each([undefined, '/private/firewall/logs'])(
+      'passes resolved router log and public-artifact paths during routed teardown (%s)',
+      async (proxyLogsDir) => {
+        const config = {
+          ...MAIN_ACTION_STUB_CONFIG,
+          proxyLogsDir,
+          auditDir: '/public/audit',
+          sessionStateDir: '/public/state',
+          modelRouting: {},
+        } as WrapperConfig;
+        const performCleanup = testHelpers.buildCleanupFn(config, () => true, () => false);
+
+        await performCleanup();
+
+        expect(mockedDockerManager.stopContainers).toHaveBeenCalledWith(
+          config.workDir,
+          config.keepContainers,
+          {
+            routerLogs: `${proxyLogsDir || config.workDir}/router-logs`,
+            auditDir: '/public/audit',
+            sessionState: '/public/state',
+          },
+        );
+      },
+    );
+
     it('buildCleanupFn tears down only once across repeated calls', async () => {
       const performCleanup = testHelpers.buildCleanupFn(
         MAIN_ACTION_STUB_CONFIG,

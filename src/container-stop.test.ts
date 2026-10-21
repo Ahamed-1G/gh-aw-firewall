@@ -2,6 +2,11 @@ import { fastKillAgentContainer } from './container-lifecycle';
 import { containerLifecycleTestHelpers } from './container-lifecycle.test-utils';
 import { stopContainers } from './container-stop';
 import { AGENT_CONTAINER_NAME, SQUID_CONTAINER_NAME } from './constants';
+import { stopAndCaptureRouterLogs } from './routing/router-log-capture';
+
+jest.mock('./routing/router-log-capture', () => ({
+  stopAndCaptureRouterLogs: jest.fn(),
+}));
 
 // Mock execa module
 import { mockExecaFn } from './test-helpers/mock-execa.test-utils';
@@ -15,9 +20,10 @@ describe('stopContainers', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('should skip stopping when keepContainers is true', async () => {
-    await stopContainers(getDir(), true);
+    await stopContainers(getDir(), true, { routerLogs: `${getDir()}/router-logs` });
 
     expect(mockExecaFn).not.toHaveBeenCalled();
+    expect(stopAndCaptureRouterLogs).not.toHaveBeenCalled();
   });
 
   it('should run pre-shutdown permission repair and docker compose down when keepContainers is false', async () => {
@@ -52,6 +58,37 @@ describe('stopContainers', () => {
       ['compose', 'down', '-v', '-t', '1'],
       expect.objectContaining({ cwd: getDir(), stdout: process.stderr, stderr: 'inherit' })
     );
+    expect(stopAndCaptureRouterLogs).not.toHaveBeenCalled();
+  });
+
+  it('captures routed logs before compose down using the resolved paths', async () => {
+    mockExecaFn.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 } as any);
+    jest.mocked(stopAndCaptureRouterLogs).mockResolvedValueOnce(undefined);
+    const routerLogs = '/private/logs/router-logs';
+
+    await stopContainers(getDir(), false, {
+      routerLogs,
+      auditDir: '/public/audit',
+      sessionState: '/public/state',
+    });
+
+    expect(stopAndCaptureRouterLogs).toHaveBeenCalledWith(getDir(), {
+      routerLogs,
+      auditDir: '/public/audit',
+      sessionState: '/public/state',
+    });
+    expect(jest.mocked(stopAndCaptureRouterLogs).mock.invocationCallOrder[0])
+      .toBeLessThan(mockExecaFn.mock.invocationCallOrder[1]);
+  });
+
+  it('does not replace compose-down errors when router capture fails', async () => {
+    mockExecaFn.mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 } as any);
+    const failure = new Error('compose down failed');
+    mockExecaFn.mockRejectedValueOnce(failure);
+    jest.mocked(stopAndCaptureRouterLogs).mockRejectedValueOnce(new Error('capture failed'));
+
+    await expect(stopContainers(getDir(), false, { routerLogs: '/private/router-logs' }))
+      .rejects.toBe(failure);
   });
 
   it('should still run docker compose down when the permission repair fails', async () => {

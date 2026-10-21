@@ -436,6 +436,21 @@ export function preserveCleanupArtifacts(
     publishTokenUsageLogPath(preservedApiProxyLogsDir, tokenLogSubdir);
   }
 
+  // Router logs are host-written and private, even with a daemon path prefix.
+  preserveDirectory({
+    runtimeDir: proxyLogsDir,
+    runtimeSubdir: 'router-logs',
+    workDir,
+    workSubdir: 'router-logs',
+    destinationBaseName: 'router-logs',
+    timestamp,
+    availableLabel: 'Router logs',
+    preservedLabel: 'Router logs',
+    permissionErrorMessage: 'Could not fix router log permissions:',
+    preserveErrorMessage: 'Could not preserve router logs:',
+    chmodRuntimeDir: false,
+  });
+
   preserveDirectory({
     runtimeDir: runnerVisibleProxyLogsDir,
     runtimeSubdir: 'cli-proxy-logs',

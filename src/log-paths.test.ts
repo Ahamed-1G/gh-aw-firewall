@@ -17,6 +17,7 @@ describe('resolveLogPaths', () => {
     expect(paths.sessionState).toBe('/tmp/awf-test/agent-session-state');
     expect(paths.agentLogs).toBe('/tmp/awf-test/agent-logs');
     expect(paths.apiProxyLogs).toBe('/tmp/awf-test/api-proxy-logs');
+    expect(paths.routerLogs).toBe('/tmp/awf-test/router-logs');
     expect(paths.cliProxyLogs).toBe('/tmp/awf-test/cli-proxy-logs');
   });
 
@@ -24,6 +25,7 @@ describe('resolveLogPaths', () => {
     const paths = resolveLogPaths(makeConfig({ proxyLogsDir: '/var/logs/firewall' }));
     expect(paths.squidLogs).toBe('/var/logs/firewall');
     expect(paths.apiProxyLogs).toBe('/var/logs/firewall/api-proxy-logs');
+    expect(paths.routerLogs).toBe('/var/logs/firewall/router-logs');
     expect(paths.cliProxyLogs).toBe('/var/logs/firewall/cli-proxy-logs');
     // agentLogs always in workDir
     expect(paths.agentLogs).toBe('/tmp/awf-test/agent-logs');

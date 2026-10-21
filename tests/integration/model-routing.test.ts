@@ -1,13 +1,12 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import execa = require('execa');
 import * as yaml from 'js-yaml';
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
 import { parseImageTag } from '../../src/image-tag';
 import { buildRouterService, ROUTER_HEALTHCHECK_TEST } from '../../src/services/router-service';
-import { cleanup } from '../fixtures/cleanup';
+import { stopContainers } from '../../src/container-stop';
 
 // The model-routing smoke workflow sets ROUTER_IMAGE to a digest-pinned build of containers/router.
 // Without it, compose builds containers/router, as AWF's local build does.
@@ -135,8 +134,10 @@ function assertRankedChoices(response, offered, endpoint) {
 // metric names, and answers every export with COLLECTOR_STATUS.
 const OTLP_COLLECTOR_SCRIPT = `
 const http = require('node:http');
+const fs = require('node:fs');
 const status = Number(process.env.COLLECTOR_STATUS || '200');
 const exportsReceived = [];
+fs.writeFileSync(process.env.COLLECTOR_OUTPUT, JSON.stringify(exportsReceived));
 
 function fields(buf) {
   const out = [];
@@ -230,6 +231,7 @@ http.createServer((req, res) => {
         record.error = String(error);
       }
       exportsReceived.push(record);
+      fs.writeFileSync(process.env.COLLECTOR_OUTPUT, JSON.stringify(exportsReceived));
       res.writeHead(status, { 'content-type': 'application/x-protobuf' });
       res.end();
       return;
@@ -238,13 +240,6 @@ http.createServer((req, res) => {
     res.end();
   });
 }).listen(4318, '0.0.0.0');
-`;
-
-const COLLECTOR_QUERY_SCRIPT = `
-fetch('http://127.0.0.1:4318/received')
-  .then(response => response.text())
-  .then(body => console.log('OTLP_RECEIVED=' + body))
-  .catch(error => { console.error(error); process.exitCode = 1; });
 `;
 
 const SERVER_SPAN_KIND = 2;
@@ -319,7 +314,7 @@ describe('Model routing', () => {
     };
   }
 
-  function writeCompose(scenario: Scenario): string {
+  function writeCompose(scenario: Scenario, workDir: string): string {
     const routerEnvironment: Record<string, string> | undefined = buildRouterService({
       imageConfig: ROUTER_IMAGE_CONFIG,
       hostEnv: scenario.hostSettings ?? {},
@@ -348,12 +343,15 @@ describe('Model routing', () => {
       services['otel-collector'] = {
         image: API_PROXY_IMAGE,
         entrypoint: ['node', '/collector/collector.js'],
-        environment: { COLLECTOR_STATUS: String(scenario.collectorStatus) },
-        volumes: [`${collectorDir}:/collector:ro`],
+        environment: {
+          COLLECTOR_STATUS: String(scenario.collectorStatus),
+          COLLECTOR_OUTPUT: `/collector/${scenario.name}.json`,
+        },
+        volumes: [`${collectorDir}:/collector`],
         networks: ['routing'],
       };
     }
-    const file = path.join(tempDir, `docker-compose.${scenario.name}.yml`);
+    const file = path.join(workDir, 'docker-compose.yml');
     fs.writeFileSync(file, yaml.dump({
       services,
       networks: { routing: { internal: true }, egress: {} },
@@ -372,7 +370,9 @@ describe('Model routing', () => {
 
   async function runScenario(scenario: Scenario, traceparents: Record<string, string> = {}): Promise<ScenarioResult> {
     const project = `awf-routing-it-${scenario.name}`;
-    const file = writeCompose(scenario);
+    const workDir = path.join(tempDir, project);
+    fs.mkdirSync(workDir, { mode: 0o700 });
+    const file = writeCompose(scenario, workDir);
     projects.push({ project, file });
 
     const up = await compose(file, project, ['up', '-d']);
@@ -389,16 +389,42 @@ describe('Model routing', () => {
     const summary = JSON.parse(smoke.stdout.split('\n')
       .find(line => line.startsWith('MODEL_ROUTING_SMOKE='))!.slice('MODEL_ROUTING_SMOKE='.length));
 
-    // Stopping the router flushes its telemetry; the collector stays up to receive it.
-    const stop = await compose(file, project, ['stop', 'router']);
-    if (stop.exitCode !== 0) await failWithLogs(file, project, `router stop failed:\n${stop.stderr}`);
+    // AWF must capture the router's final record before removing the containers.
+    await stopContainers(workDir, false, {
+      routerLogs: path.join(workDir, 'router-logs'),
+      auditDir: path.join(workDir, 'audit'),
+      sessionState: path.join(workDir, 'session-state'),
+    });
 
     let received: CollectedExport[] = [];
     if (scenario.collectorStatus !== undefined) {
-      const query = await compose(file, project, ['exec', '-T', 'otel-collector', 'node', '-e', COLLECTOR_QUERY_SCRIPT]);
-      if (query.exitCode !== 0) await failWithLogs(file, project, `collector query failed:\n${query.stderr}`);
-      received = JSON.parse(query.stdout.split('\n')
-        .find(line => line.startsWith('OTLP_RECEIVED='))!.slice('OTLP_RECEIVED='.length));
+      received = JSON.parse(fs.readFileSync(path.join(collectorDir, `${scenario.name}.json`), 'utf8'));
+    }
+    const routerFile = path.join(workDir, 'router-logs', 'router.jsonl');
+    const routerText = fs.readFileSync(routerFile, 'utf8');
+    const routerRecords = routerText.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(routerRecords[0].msg).toBe('starting');
+    expect(routerRecords[routerRecords.length - 1].msg).toBe('stopped');
+    expect(fs.statSync(routerFile).mode & 0o777).toBe(0o600);
+    expect(routerText).not.toContain('Proceed.');
+    expect(routerText).not.toContain(COLLECTOR_HEADER_TOKEN);
+    const exportsTraces = Boolean(scenario.hostSettings?.AWF_ROUTER_OTEL_EXPORTER_OTLP_ENDPOINT)
+      && scenario.hostSettings?.AWF_ROUTER_OTEL_SDK_DISABLED !== 'true'
+      && scenario.hostSettings?.AWF_ROUTER_OTEL_TRACES_EXPORTER !== 'none';
+    const spans = spansOf(received);
+    for (const route of ['/capabilities', '/classify', '/route']) {
+      const records = routerRecords.filter(record => record.msg === 'request' && record.route === route);
+      expect(records).toHaveLength(1);
+      expect(records[0].status).toBe(200);
+      if (traceparents[route]) expect(records[0].trace_id).toBe(traceparents[route].split('-')[1]);
+      const serverSpan = spans.find(span =>
+        span.kind === SERVER_SPAN_KIND && span.name.endsWith(` ${route}`));
+      if (exportsTraces) {
+        expect(serverSpan).toBeDefined();
+        expect(records[0].span_id).toMatch(/^[a-f0-9]{16}$/);
+        expect(records[0].trace_id).toBe(serverSpan!.traceId);
+        expect(records[0].span_id).toBe(serverSpan!.spanId);
+      }
     }
     return { selected: summary.selected, received };
   }
@@ -420,9 +446,9 @@ describe('Model routing', () => {
     received.filter(e => e.signal === 'metrics').flatMap(e => (e.items ?? []).map(item => item.name));
 
   beforeAll(async () => {
-    await cleanup(false);
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-routing-integration-'));
-    collectorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-routing-collector-'));
+    tempDir = fs.mkdtempSync(path.join(process.cwd(), '.awf-routing-integration-'));
+    collectorDir = path.join(tempDir, 'collector');
+    fs.mkdirSync(collectorDir, { mode: 0o755 });
     fs.writeFileSync(path.join(collectorDir, 'collector.js'), OTLP_COLLECTOR_SCRIPT, { mode: 0o644 });
     fs.chmodSync(collectorDir, 0o755);
   });
@@ -432,8 +458,6 @@ describe('Model routing', () => {
       await compose(file, project, ['down', '-v']);
     }
     fs.rmSync(tempDir, { recursive: true, force: true });
-    fs.rmSync(collectorDir, { recursive: true, force: true });
-    await cleanup(false);
   });
 
   test('runs the router planning contract from the API proxy network', async () => {
@@ -538,4 +562,3 @@ describe('Model routing', () => {
     expect(received.some(e => e.signal === 'traces' && e.status === 503)).toBe(true);
   }, 360000);
 });
-
