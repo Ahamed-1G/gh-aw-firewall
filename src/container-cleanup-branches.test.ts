@@ -131,6 +131,78 @@ describe('sanitizeDockerComposeYaml edge cases', () => {
     expect(sanitized).toContain('NO_EQUALS_HERE');
   });
 
+  it('redacts OTLP collector headers and endpoint user info in both environment forms', async () => {
+    const raw = [
+      'services:',
+      '  router:',
+      '    environment:',
+      '      OTEL_EXPORTER_OTLP_ENDPOINT: http://user:pw-canary@otel-collector:4318',
+      '      OTEL_EXPORTER_OTLP_HEADERS: authorization=Bearer%20shared-canary',
+      '      OTEL_EXPORTER_OTLP_TRACES_HEADERS: x-traces=traces-canary',
+      '      OTEL_EXPORTER_OTLP_METRICS_HEADERS: x-metrics=metrics-canary',
+      '      OTEL_SERVICE_NAME: gh-aw-router-ci',
+      '  other:',
+      '    environment:',
+      '      - AWF_ROUTER_OTEL_EXPORTER_OTLP_HEADERS=authorization=router-canary',
+      '      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://id-canary@traces.example/v1/traces',
+      '      - OTEL_SERVICE_NAME=keep_me',
+    ].join('\n');
+    fs.writeFileSync(path.join(getDir(), 'docker-compose.yml'), raw);
+    await collectDiagnosticLogs(getDir());
+    const sanitized = fs.readFileSync(
+      path.join(getDir(), 'diagnostics', 'docker-compose.yml'),
+      'utf8'
+    );
+    expect(sanitized).not.toContain('canary');
+    expect(yaml.load(sanitized)).toEqual({
+      services: {
+        router: {
+          environment: {
+            OTEL_EXPORTER_OTLP_ENDPOINT: 'http://[REDACTED]@otel-collector:4318',
+            OTEL_EXPORTER_OTLP_HEADERS: '[REDACTED]',
+            OTEL_EXPORTER_OTLP_TRACES_HEADERS: '[REDACTED]',
+            OTEL_EXPORTER_OTLP_METRICS_HEADERS: '[REDACTED]',
+            OTEL_SERVICE_NAME: 'gh-aw-router-ci',
+          },
+        },
+        other: {
+          environment: [
+            'AWF_ROUTER_OTEL_EXPORTER_OTLP_HEADERS=[REDACTED]',
+            'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://[REDACTED]@traces.example/v1/traces',
+            'OTEL_SERVICE_NAME=keep_me',
+          ],
+        },
+      },
+    });
+  });
+
+  it('redacts the user info of OTLP endpoints with leading whitespace', async () => {
+    const raw = [
+      'services:',
+      '  router:',
+      '    environment:',
+      '      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: " \\u00a0http://user:pw-canary@traces:4318/v1/traces"',
+      '      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "\\N\\thttps://id-canary@metrics:4318/v1/metrics"',
+    ].join('\n');
+    fs.writeFileSync(path.join(getDir(), 'docker-compose.yml'), raw);
+    await collectDiagnosticLogs(getDir());
+    const sanitized = fs.readFileSync(
+      path.join(getDir(), 'diagnostics', 'docker-compose.yml'),
+      'utf8'
+    );
+    expect(sanitized).not.toContain('canary');
+    expect(yaml.load(sanitized)).toEqual({
+      services: {
+        router: {
+          environment: {
+            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ' \u00a0http://[REDACTED]@traces:4318/v1/traces',
+            OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: '\u0085\thttps://[REDACTED]@metrics:4318/v1/metrics',
+          },
+        },
+      },
+    });
+  });
+
   it('redacts full value when array entry contains embedded equals', async () => {
     const raw = [
       'services:',
