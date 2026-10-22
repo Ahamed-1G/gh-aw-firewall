@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { persistHostExecutorProxyDebugDiagnostics } from '../../src/enclave/host-executor-journal';
 import { projectEnclaveSessionDiagnostics } from '../../src/cloud-hypervisor/enclave-session-diagnostics';
+import { captureEnclaveProxyContainerLog, preservePublicEnclaveProxyDiagnostics } from '../../src/enclave/proxy-debug-retention';
 
 const diagnostics = require('./cloud-hypervisor-enclave-diagnostics');
 const live = require('./cloud-hypervisor-enclave-live-smoke');
@@ -208,6 +209,28 @@ describe('public enclave conformance diagnostic retention', () => {
     expect(records()).toContain('enclave_model_budget_rejected');
     expect(records()).toContain('"403":1');
     expect(records()).not.toContain(secret);
+  });
+
+  it('uploads the new auth projection without copying provider text or header values', async () => {
+    const context = prepare();
+    const log = await captureEnclaveProxyContainerLog(async () => ({
+      exitCode: 0, stderr: '',
+      stdout: JSON.stringify({
+        level: 'warn', event: 'copilot_auth_diagnostic', status: 401,
+        credential_source: 'github_token', credential_kind: 'fine_grained_pat',
+        target: 'standard', endpoint: 'models', authorization: 'bearer',
+        error_class: 'invalid_credential', body_capture: 'complete',
+        response_body: secret, headers: { Authorization: secret }, targetHost: secret,
+      }) + '\n',
+    }));
+    await preservePublicEnclaveProxyDiagnostics({ runId, journalDir: roots.journal },
+      { scope: 'run-cumulative', status: 'captured', records: 1, local: {}, upstream: { '401': 1 } },
+      [{ schemaVersion: 1, origin: 'upstream', status: 401 }], log);
+    diagnostics.collect(context, { status: 'failed' });
+    expect(records()).toContain('event=copilot_auth_diagnostic status=401 credential_source=github_token');
+    expect(records()).toContain('error_class=invalid_credential');
+    expect(records()).toContain('endpoint=models');
+    expect(records()).not.toMatch(/PRIVATE_TOKEN|response_body|Authorization|targetHost/);
   });
 
   it.each(['symlink', 'hardlink', 'permissions', 'oversized', 'identity', 'schema', 'check-suffix'])(

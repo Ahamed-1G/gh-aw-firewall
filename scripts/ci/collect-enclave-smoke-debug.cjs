@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { isSafeCopilotAuthLogFields } = require('../../dist/enclave/proxy-auth-diagnostics');
 
 const MAX_STREAM_BYTES = 1024 * 1024;
 const MAX_FILES = 32;
@@ -192,6 +193,7 @@ function projectProxyContainerLog(bytes) {
   const events = new Set([
     'startup', 'startup_complete', 'server_start', 'shutdown', 'request_start',
     'request_complete', 'request_error', 'upstream_error_response', 'upstream_auth_error',
+    'copilot_auth_diagnostic',
     'request_transform_failed', 'key_validation_error', 'oidc_startup_failed',
     'model_fetch_error', 'model_routing_bootstrap_error',
     'enclave_model_budget_rejected', 'rate_limited', 'request_validation_failed', 'model_fallback_exhausted',
@@ -206,8 +208,9 @@ function projectProxyContainerLog(bytes) {
   if (lines.at(-1) !== '' ||
       !/^capture_status=(?:captured dropped=(?:[0-9]{1,5})|empty|unavailable)$/.test(trailer ?? '') ||
       !lines.slice(0, -2).every(line => {
-        const match = /^source=(stdout|stderr) level=(info|warn|error) event=([a-z_]+)(?: status=([1-5]\d\d))?$/.exec(line);
-        return match && events.has(match[3]);
+        const match = /^source=(stdout|stderr) level=(info|warn|error) event=([a-z_]+)(?: status=([1-5]\d\d))?(?: (.+))?$/.exec(line);
+        return match && events.has(match[3])
+          && (match[3] === 'copilot_auth_diagnostic' ? isSafeCopilotAuthLogFields(match[5]) : !match[5]);
       })) throw new Error('Unsafe enclave proxy container projection');
   return bytes;
 }

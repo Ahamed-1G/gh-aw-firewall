@@ -1724,6 +1724,53 @@ resource cleanup still preserves private recovery state only on the runner.
 Collection errors fail the harness without skipping that cleanup or falling
 back to uploading raw files. Abrupt host termination cannot guarantee capture.
 
+#### Distinguishing agent-enclave authentication failures
+
+Candidate run [39697934942](https://github.com/github/gh-aw-firewall/actions/runs/39697934942)
+at `4093a96ed4a99fcb8d3fb4d163757c67c62fd124` passed deterministic contracts,
+attested artifact building, script execution, VM boot, guest connectivity,
+proxy readiness, and cleanup. Copilot exited with code 1 after 15.5 seconds,
+and the dedicated proxy observed three **upstream 401** responses, not local
+model-budget rejections. Its old public projections retained status only,
+so neither the failing endpoint nor the authentication decision was established.
+No canonical registry finding establishes a root cause for this run.
+
+The dedicated proxy now emits `copilot_auth_diagnostic` for completed successful
+HTTP requests and upstream 400/401/403 responses. It observes existing traffic
+only: no validation call, token exchange, credential rotation, or extra model
+request is introduced. The protected run-cumulative container-log projection and
+both public collectors retain the same bounded, closed-category fields:
+
+| Hypothesis | Discriminating evidence | What rules it out, and remaining limits |
+|---|---|---|
+| H1: The proxy selected a missing, placeholder, or unintended credential, including BYOK shadowing the GitHub token. | `credential_source`, `credential_kind`, `credential_shape`, and the actual `method`/`endpoint`. Models GETs can deliberately select the GitHub token while inference uses BYOK. | The intended source and non-placeholder family rule out selection/shadowing for that request. They do not establish that the selected secret belongs to the intended account. |
+| H2: The selected credential is unsupported, expired, revoked, or lacks Copilot Requests permission. | Family categories distinguish classic/fine-grained PATs, OAuth, user tokens, installation tokens, and other values. `error_class` records exact known expiry, credential, and scope errors; `challenge` records only fixed authentication-error categories. Successful controls retain their endpoint and route. | A successful request disproves total rejection for that credential/route/endpoint at that time; a models success alone does not prove inference authorization. A generic 401 or `Bad credentials` cannot separate expiry, revocation, and permissions. |
+| H3: The request reached a different host or endpoint than the configured Copilot route. | `target`, `target_source`, `server_kind`, `base_path`, `target_match`, and the actual upstream `endpoint` after rewriting. Host/tenant names and paths are never copied. | `target_match=yes` and the expected target category, base-path state, and endpoint rule out an internal routing mismatch. They do not prove that the operator configured the correct tenant. |
+| H4: Authorization was malformed, duplicated, lost, or overwritten after injection. | `credential_shape`, actual wire `authorization` category, and `authorization_match` against injected headers, including changes made after header construction. | A well-formed expected scheme and `authorization_match=yes` rule out injection corruption. Scheme correctness still depends on credential family and target; compare the authentication matrix. |
+| H5: Integration attribution or account policy/entitlement rejects otherwise well-formed requests. | `integration_source`, actual `integration` category, `integration_match`, and exact known integration/entitlement/scope rejection classes. | The expected integration category and `integration_match=yes` rule out an integration override, not upstream entitlement restrictions. Those require an explicit provider reason or a successful equivalent request; an unclassified 401 remains unresolved. |
+
+The [official Copilot CLI authentication documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli#supported-token-types)
+distinguishes supported OAuth, fine-grained PAT, and user-to-server tokens from
+unsupported classic PATs. Fine-grained PATs require the account-level
+**Copilot Requests** permission; token-family shape alone cannot prove it.
+[github/copilot-cli#46](https://github.com/github/copilot-cli/issues/46)
+records the exact `Personal Access Token does not have Copilot Requests permission`
+401 reason, which is classified as `insufficient_scope`, including its fixed
+`401 unauthorized:` prefix. These are diagnostic signals, not changes to AWF's
+supported authentication behavior or its target-dependent header selection.
+
+All fields are reconstructed from finite vocabularies. Unknown field values
+become `unknown`; unrecognized provider reasons become `unclassified`.
+Truncated, undecodable, oversized, or omitted error bodies cannot establish a
+reason and yield `uninspectable`; `body_capture` distinguishes capture state.
+Only exact known identifiers/messages are classified, including bounded decoded
+compressed bodies. Raw error text, arbitrary error codes, headers, token
+fragments/lengths/hashes, account identifiers, hosts, URLs, prompts, and request
+IDs are not added to these public records. Credential comparisons stay within
+the proxy. Collection still uses the existing eligibility, ownership, size,
+mode, and teardown controls. Absence of a diagnostic is not evidence that
+authentication succeeded.
+
 `v0.28.37` and earlier predate the probe (#9499) and its integration, so they
 are ineligible. After a future authorized release whose tag contains both:
 
