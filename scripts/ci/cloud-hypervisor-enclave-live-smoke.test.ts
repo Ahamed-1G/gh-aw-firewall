@@ -1463,6 +1463,58 @@ describe('bounded MCP acceptance check diagnostics', () => {
   beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
 
+  it.each(['agent-enospc', 'script-enospc', 'guest-oom'])(
+    'wires every %s phase and preserves the original failure without logging its message', async step => {
+      const source = fs.readFileSync(harnessPath, 'utf8');
+      for (const phase of ['request', 'result-validation', 'cleanup']) {
+        expect(source).toContain(`acceptanceCheck(failureContext, '${step}', '${phase}'`);
+        const context: { check?: Record<string, unknown> } = {};
+        const error = new Error(sentinel);
+        await expect(harness.acceptanceCheck(context, step, phase, () => { throw error; }))
+          .rejects.toBe(error);
+        expect(context.check).toEqual({ step, phase, status: 'failed', reason: 'operation-failed' });
+        await harness.acceptanceCheck(context, step, 'cleanup', () => undefined);
+        expect(context.check).toEqual({ step, phase, status: 'failed', reason: 'operation-failed' });
+      }
+      expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+    },
+  );
+
+  it.each(['agent-enospc', 'script-enospc', 'guest-oom'])(
+    'distinguishes canonical error and wrong-result outcomes for %s without copying values', async step => {
+      for (const [status, reason] of [['error', 'expected-ok-status'], ['ok', 'result-mismatch']]) {
+        const context: { check?: Record<string, unknown> } = {};
+        const structured = status === 'ok' ? { status, result: sentinel } : { status };
+        const response = {
+          jsonrpc: '2.0', id: 9, result: {
+            structuredContent: structured,
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+          },
+        };
+        await expect(harness.acceptanceCheck(context, step, 'result-validation',
+          () => harness.assertExpectedToolResult(response, 9, { enospcObserved: true }, 'resource limit')))
+          .rejects.toThrow('guest assertion failed');
+        expect(context.check).toMatchObject({
+          step, phase: 'result-validation', status: 'failed', reason,
+          response: { structuredStatus: status, contentMatches: true },
+        });
+        expect(JSON.stringify(context)).not.toContain(sentinel);
+      }
+      const context: { check?: Record<string, unknown> } = {};
+      await harness.acceptanceCheck(context, step, 'result-validation', () => {
+        const structured = { status: 'ok', result: true };
+        harness.assertExpectedToolResult({
+          jsonrpc: '2.0', id: 9, result: {
+            structuredContent: structured,
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+          },
+        }, 9, true, 'resource limit');
+      });
+      expect(context.check).toEqual({ step, phase: 'result-validation', status: 'passed' });
+      expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+    },
+  );
+
   it.each([
     ['response-missing', undefined],
     ['jsonrpc-version', { ...canonical(), jsonrpc: sentinel }],
@@ -1605,7 +1657,7 @@ describe('bounded MCP acceptance check diagnostics', () => {
 describe('sanitized live acceptance failure reporting', () => {
   const sentinel = 'AWF_PASSWD_SENTINEL_sensitive-user-record';
   const expected = (stage: string) => `Live enclave acceptance failed during ${stage}; `
-    + 'raw error details were suppressed. Review AWF_HOST_STARTUP_DIAGNOSTIC and AWF_PRIMARY_VM_READINESS records above.';
+    + 'raw error details were suppressed. Review AWF_ENCLAVE_ACCEPTANCE_CHECK, AWF_HOST_STARTUP_DIAGNOSTIC and AWF_PRIMARY_VM_READINESS records above.';
 
   afterEach(() => jest.restoreAllMocks());
 

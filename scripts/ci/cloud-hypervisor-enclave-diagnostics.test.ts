@@ -85,6 +85,29 @@ describe('public enclave conformance diagnostic retention', () => {
     })).toEqual({ step: 'guest-timeout', phase: 'request', status: 'failed', response: {} });
   });
 
+  it.each(['agent-enospc', 'script-enospc', 'guest-oom'])(
+    'retains the exact %s failure and finite reason in the uploaded artifact', step => {
+      const context = prepare();
+      diagnostics.collect(context, { status: 'failed', stage: 'resource-limit checks', check: {
+        step, phase: 'result-validation', status: 'failed', reason: 'result-mismatch',
+        httpStatus: 200, expected: secret, actual: secret, response: {
+          structuredStatus: 'ok', contentMatches: true, result: secret,
+        },
+      } });
+      const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+      expect(summary.check).toEqual({
+        step, phase: 'result-validation', status: 'failed', reason: 'result-mismatch',
+        httpStatus: 200, response: { structuredStatus: 'ok', contentMatches: true },
+      });
+      expect(records()).not.toContain(secret);
+      expect(diagnostics.projectAcceptanceCheck({
+        step, phase: 'result-validation', status: 'failed', reason: 'expected-ok-status',
+      })).toEqual({
+        step, phase: 'result-validation', status: 'failed', reason: 'expected-ok-status',
+      });
+    },
+  );
+
   it.each(['passed', 'failed'])('retains public script and agent evidence outside the deleted fixture on %s', status => {
     const context = prepare();
     invocation();

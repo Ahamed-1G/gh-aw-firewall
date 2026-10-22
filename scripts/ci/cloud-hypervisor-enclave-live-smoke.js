@@ -1122,7 +1122,10 @@ function assertCanonicalToolError(response, requestId) {
 function assertExpectedToolResult(response, requestId, expected, label) {
   const result = parsePublicToolResult(response, requestId);
   if (result.status !== 'ok' || !isDeepStrictEqual(result.result, expected)) {
-    throw new Error(`Live enclave ${label} guest assertion failed`);
+    const error = mcpFailure(result.status !== 'ok' ? 'expected-ok-status' : 'result-mismatch',
+      response, requestId);
+    error.message = `Live enclave ${label} guest assertion failed`;
+    throw error;
   }
 }
 
@@ -1947,40 +1950,49 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
 
     failureContext.stage = FAILURE_STAGES.RESOURCE_LIMITS;
     const agentEnospcProbe = buildAgentEnospcProbe();
-    const agentEnospcResponse = await requestMcp(endpoint, gatewayKey, 6, 'tools/call', {
-      name: 'enclave_run_agent',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: agentEnospcProbe.schema,
-        prompt: agentEnospcProbe.prompt,
-      },
-    });
-    assertExpectedToolResult(agentEnospcResponse, 6, agentEnospcProbe.expected, 'agent aggregate ENOSPC');
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    const agentEnospcResponse = await acceptanceCheck(failureContext, 'agent-enospc', 'request',
+      () => requestMcp(endpoint, gatewayKey, 6, 'tools/call', {
+        name: 'enclave_run_agent',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: agentEnospcProbe.schema,
+          prompt: agentEnospcProbe.prompt,
+        },
+      }));
+    await acceptanceCheck(failureContext, 'agent-enospc', 'result-validation',
+      () => assertExpectedToolResult(agentEnospcResponse, 6, agentEnospcProbe.expected, 'agent aggregate ENOSPC'));
+    await acceptanceCheck(failureContext, 'agent-enospc', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
     const enospcExpected = { enospcObserved: true, probeFilesRemoved: true };
-    const enospcResponse = await requestMcp(endpoint, gatewayKey, 7, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: buildConstantObjectSchema(enospcExpected),
-        script: buildEnospcProbeScript(),
-      },
-    });
-    assertExpectedToolResult(enospcResponse, 7, enospcExpected, 'script aggregate ENOSPC');
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    const enospcResponse = await acceptanceCheck(failureContext, 'script-enospc', 'request',
+      () => requestMcp(endpoint, gatewayKey, 7, 'tools/call', {
+        name: 'enclave_run_script',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: buildConstantObjectSchema(enospcExpected),
+          script: buildEnospcProbeScript(),
+        },
+      }));
+    await acceptanceCheck(failureContext, 'script-enospc', 'result-validation',
+      () => assertExpectedToolResult(enospcResponse, 7, enospcExpected, 'script aggregate ENOSPC'));
+    await acceptanceCheck(failureContext, 'script-enospc', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
     const oomExpected = { childKilledByOom: true, oomKillCounterIncreased: true };
-    const oomResponse = await requestMcp(endpoint, gatewayKey, 8, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: buildConstantObjectSchema(oomExpected),
-        script: buildOomProbeScript(),
-      },
-    });
-    assertExpectedToolResult(oomResponse, 8, oomExpected, 'guest OOM');
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    const oomResponse = await acceptanceCheck(failureContext, 'guest-oom', 'request',
+      () => requestMcp(endpoint, gatewayKey, 8, 'tools/call', {
+        name: 'enclave_run_script',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: buildConstantObjectSchema(oomExpected),
+          script: buildOomProbeScript(),
+        },
+      }));
+    await acceptanceCheck(failureContext, 'guest-oom', 'result-validation',
+      () => assertExpectedToolResult(oomResponse, 8, oomExpected, 'guest OOM'));
+    await acceptanceCheck(failureContext, 'guest-oom', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
     failureContext.stage = FAILURE_STAGES.FAILURE_HANDLING;
     const errorSchema = { type: 'const', value: true };
@@ -2345,7 +2357,7 @@ function reportFailure(_error, stage) {
   const safeStage = Object.values(FAILURE_STAGES).includes(stage) ? stage : 'unknown stage';
   console.error(
     `Live enclave acceptance failed during ${safeStage}; raw error details were suppressed. `
-    + 'Review AWF_HOST_STARTUP_DIAGNOSTIC and AWF_PRIMARY_VM_READINESS records above.',
+    + 'Review AWF_ENCLAVE_ACCEPTANCE_CHECK, AWF_HOST_STARTUP_DIAGNOSTIC and AWF_PRIMARY_VM_READINESS records above.',
   );
   process.exitCode = 1;
 }

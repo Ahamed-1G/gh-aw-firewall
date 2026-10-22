@@ -17,12 +17,14 @@ const DIAGNOSTIC_NAME = /^([a-f0-9]{32})-([a-f0-9]{32})(?:\.proxy-debug)?\.json$
 const UPLOAD_NAME = /^(?:acceptance|invocation-[0-9]+|session-[0-9]+|proxy-[0-9]+)\.json$/;
 const MAX_RECORDS = 128;
 
-const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation'];
+const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation',
+  'agent-enospc', 'script-enospc', 'guest-oom'];
 const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-discovery',
   'marker-wait', 'disconnect-validation'];
 const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version', 'request-id',
   'jsonrpc-error', 'result-missing', 'tool-is-error', 'structured-content', 'structured-fields',
-  'content-mismatch', 'expected-error-status', 'http-status', 'invalid-json', 'response-too-large',
+  'content-mismatch', 'expected-error-status', 'expected-ok-status', 'result-mismatch',
+  'http-status', 'invalid-json', 'response-too-large',
   'request-timeout', 'request-failed', 'response-aborted', 'response-failed', 'disconnect-not-cancelled'];
 const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'resultPresent',
   'toolIsError', 'structuredPresent', 'contentMatches'];

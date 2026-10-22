@@ -1763,7 +1763,8 @@ Copilot tool attempted; wrapper I/O and tool I/O remain distinct.
 #### Distinguishing acceptance MCP errors from expected guest failures
 
 The live conformance harness emits `AWF_ENCLAVE_ACCEPTANCE_CHECK` records for
-the deliberate guest failure, timeout and cancellation probes. Each record names
+the agent ENOSPC, script ENOSPC, guest OOM, and deliberate guest failure,
+timeout and cancellation probes. Each record names
 the probe and its request, result-validation, cleanup, resource-discovery,
 marker-wait or disconnect-validation phase, with a started/passed/failed status.
 The first failed check is also retained in `acceptance.json`, independently of
@@ -1772,7 +1773,10 @@ later concurrent cancellation progress.
 Failure reasons distinguish transport failures, HTTP/non-JSON responses,
 timeouts, oversized or interrupted responses, JSON-RPC envelope/version/ID
 errors, tool `isError`, missing/invalid structured content, unexpected structured
-fields, mismatched text content and an unexpected successful result. Response
+fields, mismatched text content, an unexpected successful result for an
+expected guest failure, a canonical error where success was required, and
+a successful result that differs from the expected probe result. Actual and
+expected result values are never emitted. Response
 metadata contains only boolean shape checks, a finite structured-status and
 JSON-RPC error class, and a bounded HTTP status when observed. No response text,
 RPC error message/data, result values, headers, URLs, request IDs or arbitrary
