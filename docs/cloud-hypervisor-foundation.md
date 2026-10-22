@@ -1760,6 +1760,27 @@ never copied. The latest snapshot and last 16 operation errors survive the
 These observations do not change permissions or prove which operation a
 Copilot tool attempted; wrapper I/O and tool I/O remain distinct.
 
+#### Distinguishing acceptance MCP errors from expected guest failures
+
+The live conformance harness emits `AWF_ENCLAVE_ACCEPTANCE_CHECK` records for
+the deliberate guest failure, timeout and cancellation probes. Each record names
+the probe and its request, result-validation, cleanup, resource-discovery,
+marker-wait or disconnect-validation phase, with a started/passed/failed status.
+The first failed check is also retained in `acceptance.json`, independently of
+later concurrent cancellation progress.
+
+Failure reasons distinguish transport failures, HTTP/non-JSON responses,
+timeouts, oversized or interrupted responses, JSON-RPC envelope/version/ID
+errors, tool `isError`, missing/invalid structured content, unexpected structured
+fields, mismatched text content and an unexpected successful result. Response
+metadata contains only boolean shape checks, a finite structured-status and
+JSON-RPC error class, and a bounded HTTP status when observed. No response text,
+RPC error message/data, result values, headers, URLs, request IDs or arbitrary
+exception messages are logged. The collector reprojects this metadata before
+upload. Existing acceptance criteria, including rejection of tool `isError`,
+are unchanged; an intentionally failing guest is not itself proof that the
+broker returned the expected canonical error.
+
 #### Distinguishing agent-enclave authentication failures
 
 Candidate run [39697934942](https://github.com/github/gh-aw-firewall/actions/runs/39697934942)

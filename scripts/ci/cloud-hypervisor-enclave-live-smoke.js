@@ -36,27 +36,80 @@ function assertReleaseAssets(required, published) {
   }
 }
 
-function parsePublicToolResult(response, requestId) {
-  if (!response || response.jsonrpc !== '2.0' || response.id !== requestId
-      || response.error || !response.result || response.result.isError === true) {
-    throw new Error('Public enclave MCP call did not return a successful JSON-RPC result');
+const mcpFailures = new WeakMap();
+const mcpResponses = new WeakMap();
+
+function mcpFailure(reason, response, requestId, httpStatus) {
+  const error = new Error('Public enclave MCP request failed');
+  const structured = response?.result?.structuredContent;
+  mcpFailures.set(error, {
+    reason, httpStatus: httpStatus ?? (response && typeof response === 'object'
+      ? mcpResponses.get(response) : undefined),
+    ...(response === undefined ? {} : { response: {
+      present: !!response,
+      jsonrpcValid: response?.jsonrpc === '2.0',
+      idMatches: response?.id === requestId,
+      rpcError: !!response?.error,
+      rpcErrorClass: !response?.error ? 'absent'
+        : new Map([[-32700, 'parse-error'], [-32600, 'invalid-request'], [-32601, 'method-not-found'],
+          [-32602, 'invalid-params'], [-32603, 'internal-error']]).get(response.error.code)
+          || (Number.isInteger(response.error.code) && response.error.code >= -32099
+            && response.error.code <= -32000 ? 'server-error' : 'other'),
+      resultPresent: !!response?.result,
+      toolIsError: response?.result?.isError === true,
+      structuredPresent: !!structured,
+      structuredStatus: structured === undefined ? 'absent'
+        : ['ok', 'error'].includes(structured?.status) ? structured.status : 'invalid',
+      contentMatches: Array.isArray(response?.result?.content)
+        && response.result.content.length === 1
+        && response.result.content[0]?.type === 'text'
+        && response.result.content[0].text === JSON.stringify(structured),
+    } }),
+  });
+  return error;
+}
+
+async function acceptanceCheck(context, step, phase, action) {
+  const record = (status, details = {}) => {
+    const check = conformanceDiagnostics.projectAcceptanceCheck({ step, phase, status, ...details });
+    if (!check) throw new Error('Invalid acceptance diagnostic step');
+    if (context.check?.status !== 'failed') context.check = check;
+    console.log(`AWF_ENCLAVE_ACCEPTANCE_CHECK ${JSON.stringify(check)}`);
+  };
+  record('started');
+  try {
+    const result = await action();
+    record('passed');
+    return result;
+  } catch (error) {
+    record('failed', mcpFailures.get(error) || { reason: 'operation-failed' });
+    throw error;
   }
+}
+
+function parsePublicToolResult(response, requestId) {
+  if (!response) throw mcpFailure('response-missing', response, requestId);
+  if (response.jsonrpc !== '2.0') throw mcpFailure('jsonrpc-version', response, requestId);
+  if (response.id !== requestId) throw mcpFailure('request-id', response, requestId);
+  if (response.error) throw mcpFailure('jsonrpc-error', response, requestId);
+  if (!response.result) throw mcpFailure('result-missing', response, requestId);
+  if (response.result.isError === true) throw mcpFailure('tool-is-error', response, requestId);
   const structured = response.result.structuredContent;
   if (!structured || typeof structured !== 'object' || Array.isArray(structured)
       || !['ok', 'error'].includes(structured.status)) {
-    throw new Error('Public enclave MCP result is not canonical structured content');
+    throw mcpFailure('structured-content', response, requestId);
   }
   const keys = Object.keys(structured).sort();
   if (JSON.stringify(keys) !== JSON.stringify(
     structured.status === 'ok' ? ['result', 'status'] : ['status'],
   )) {
-    throw new Error('Public enclave MCP result contains unexpected fields');
+    throw mcpFailure('structured-fields', response, requestId);
   }
   const content = response.result.content;
   if (!Array.isArray(content) || content.length !== 1
       || content[0]?.type !== 'text'
       || content[0].text !== JSON.stringify(structured)) {
-    throw new Error('Public enclave MCP text and structured results do not match canonically');
+    throw mcpFailure('content-mismatch', response, requestId);
   }
   return structured;
 }
@@ -175,20 +228,29 @@ function requestMcp(endpoint, apiKey, requestId, method, params, signal, timeout
       },
       timeout: timeoutMs,
     }, (response) => {
+      const httpStatus = response.statusCode;
       const chunks = [];
       let size = 0;
       response.on('data', (chunk) => {
         size += chunk.length;
-        if (size > 420 * 1024) request.destroy(new Error('MCP response exceeded its bound'));
-        else chunks.push(chunk);
+        if (size > 420 * 1024) {
+          const error = mcpFailure('response-too-large', undefined, requestId, httpStatus);
+          reject(error);
+          request.destroy(error);
+        } else chunks.push(chunk);
       });
       response.on('end', () => {
         try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+          const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (value && typeof value === 'object') mcpResponses.set(value, httpStatus);
+          resolve(value);
         } catch {
-          reject(new Error('Public enclave MCP response was not bounded JSON'));
+          reject(mcpFailure(httpStatus === 200 ? 'invalid-json' : 'http-status',
+            undefined, requestId, httpStatus));
         }
       });
+      response.on('aborted', () => reject(mcpFailure('response-aborted', undefined, requestId, httpStatus)));
+      response.on('error', () => reject(mcpFailure('response-failed', undefined, requestId, httpStatus)));
     });
     let cancelled = false;
     const cancel = () => {
@@ -198,10 +260,14 @@ function requestMcp(endpoint, apiKey, requestId, method, params, signal, timeout
     };
     if (signal?.aborted) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });
-    request.on('error', () => {
-      if (!cancelled) reject(new Error('Public enclave MCP request failed'));
+    request.on('error', (error) => {
+      if (!cancelled) reject(mcpFailures.has(error) ? error : mcpFailure('request-failed'));
     });
-    request.on('timeout', () => request.destroy(new Error('Public enclave MCP request timed out')));
+    request.on('timeout', () => {
+      const error = mcpFailure('request-timeout');
+      reject(error);
+      request.destroy(error);
+    });
     request.on('close', () => signal?.removeEventListener('abort', cancel));
     if (!cancelled) request.end(payload);
   });
@@ -1046,10 +1112,10 @@ async function waitForVmCleanup(timeoutMs, expectedPrimary) {
   throw residueError || new Error('Cloud Hypervisor VM cleanup did not complete');
 }
 
-function assertCanonicalToolError(response, requestId, label) {
+function assertCanonicalToolError(response, requestId) {
   const result = parsePublicToolResult(response, requestId);
   if (result.status !== 'error') {
-    throw new Error(`Live enclave ${label} did not return the canonical bounded error`);
+    throw mcpFailure('expected-error-status', response, requestId);
   }
 }
 
@@ -1918,27 +1984,33 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
 
     failureContext.stage = FAILURE_STAGES.FAILURE_HANDLING;
     const errorSchema = { type: 'const', value: true };
-    const guestFailure = await requestMcp(endpoint, gatewayKey, 9, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: errorSchema,
-        script: 'raise SystemExit(23)',
-      },
-    });
-    assertCanonicalToolError(guestFailure, 9, 'guest failure');
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    const guestFailure = await acceptanceCheck(failureContext, 'guest-failure', 'request',
+      () => requestMcp(endpoint, gatewayKey, 9, 'tools/call', {
+        name: 'enclave_run_script',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: errorSchema,
+          script: 'raise SystemExit(23)',
+        },
+      }));
+    await acceptanceCheck(failureContext, 'guest-failure', 'result-validation',
+      () => assertCanonicalToolError(guestFailure, 9));
+    await acceptanceCheck(failureContext, 'guest-failure', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
-    const timeout = await requestMcp(endpoint, gatewayKey, 10, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: errorSchema,
-        script: 'import time; time.sleep(150)',
-      },
-    });
-    assertCanonicalToolError(timeout, 10, 'timeout');
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    const timeout = await acceptanceCheck(failureContext, 'guest-timeout', 'request',
+      () => requestMcp(endpoint, gatewayKey, 10, 'tools/call', {
+        name: 'enclave_run_script',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: errorSchema,
+          script: 'import time; time.sleep(150)',
+        },
+      }));
+    await acceptanceCheck(failureContext, 'guest-timeout', 'result-validation',
+      () => assertCanonicalToolError(timeout, 10));
+    await acceptanceCheck(failureContext, 'guest-timeout', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
     const journalRoot = '/var/lib/awf-cloud-hypervisor/host-executor-journal';
     const existingCancellationResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
@@ -1948,24 +2020,26 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       'while True: time.sleep(1)',
     ].join('\n');
     const cancellationController = new AbortController();
-    const cancellationRequest = requestMcp(endpoint, gatewayKey, 11, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: errorSchema,
-        script: cancellationMarker,
-      },
-    }, cancellationController.signal);
-    const cancellationActive = await waitForInvocationRecord(
-      journalRoot, existingCancellationResources, awf.pid, 90_000,
-    );
-    await waitForPath(path.join(cancellationActive.record.directory, 'output', 'cancel-probe-started'), 90_000);
+    const cancellationRequest = acceptanceCheck(failureContext, 'guest-cancellation', 'request',
+      () => requestMcp(endpoint, gatewayKey, 11, 'tools/call', {
+        name: 'enclave_run_script',
+        arguments: {
+          privateRepo: 'github/gh-aw-firewall',
+          schema: errorSchema,
+          script: cancellationMarker,
+        },
+      }, cancellationController.signal));
+    const cancellationActive = await acceptanceCheck(failureContext, 'guest-cancellation', 'resource-discovery',
+      () => waitForInvocationRecord(journalRoot, existingCancellationResources, awf.pid, 90_000));
+    await acceptanceCheck(failureContext, 'guest-cancellation', 'marker-wait',
+      () => waitForPath(path.join(cancellationActive.record.directory, 'output', 'cancel-probe-started'), 90_000));
     cancellationController.abort();
     const cancelled = await cancellationRequest;
-    if (cancelled !== undefined) {
-      throw new Error('Public MCP disconnect did not cancel the live enclave request');
-    }
-    await waitForVmCleanup(15_000, primaryVmResidue);
+    await acceptanceCheck(failureContext, 'guest-cancellation', 'disconnect-validation', () => {
+      if (cancelled !== undefined) throw mcpFailure('disconnect-not-cancelled');
+    });
+    await acceptanceCheck(failureContext, 'guest-cancellation', 'cleanup',
+      () => waitForVmCleanup(15_000, primaryVmResidue));
 
     failureContext.stage = FAILURE_STAGES.STARTUP_FAULTS;
     try {
@@ -2208,6 +2282,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
         conformanceDiagnostics.collect(diagnosticContext, {
           status: acceptancePassed && !process.exitCode ? 'passed' : 'failed',
           stage: Object.values(FAILURE_STAGES).includes(failureContext.stage) ? failureContext.stage : 'unknown stage',
+          check: failureContext.check,
           startup: startupSnapshots.map(({ stage, profile, diagnostic, evidence }) =>
             ({ stage, profile, diagnostic, evidence })),
         });
@@ -2322,5 +2397,7 @@ module.exports = {
   buildOomProbeScript,
   buildScriptGuestProbe,
   parsePublicToolResult,
+  assertCanonicalToolError,
+  acceptanceCheck,
   requestMcp,
 };

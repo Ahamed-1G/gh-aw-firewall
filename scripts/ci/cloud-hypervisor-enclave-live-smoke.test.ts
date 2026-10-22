@@ -144,6 +144,11 @@ const harness = require(harnessPath) as {
   buildOomProbeScript(): string;
   buildScriptGuestProbe(): { expected: Record<string, unknown>; schema: unknown };
   parsePublicToolResult(response: unknown, requestId: number): { status: string; result?: unknown };
+  assertCanonicalToolError(response: unknown, requestId: number): void;
+  acceptanceCheck<T>(
+    context: { check?: Record<string, unknown> }, step: string, phase: string,
+    action: () => T | Promise<T>,
+  ): Promise<T>;
   requestMcp(
     endpoint: string,
     apiKey: string,
@@ -1446,6 +1451,154 @@ describe('Cloud Hypervisor enclave live acceptance harness', () => {
     expect(source).toContain("'tools/call'");
     expect(source).not.toContain('executor.sock');
     expect(source).not.toContain('host-executor-client');
+  });
+});
+
+describe('bounded MCP acceptance check diagnostics', () => {
+  const sentinel = 'PRIVATE_TOKEN_CAPABILITY_PAYLOAD_/private/path';
+  const canonical = (status = 'error') => ({
+    jsonrpc: '2.0', id: 9,
+    result: { structuredContent: { status }, content: [{ type: 'text', text: JSON.stringify({ status }) }] },
+  });
+  beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each([
+    ['response-missing', undefined],
+    ['jsonrpc-version', { ...canonical(), jsonrpc: sentinel }],
+    ['request-id', { ...canonical(), id: sentinel }],
+    ['jsonrpc-error', { ...canonical(), error: { message: sentinel, data: sentinel } }],
+    ['result-missing', { jsonrpc: '2.0', id: 9 }],
+    ['tool-is-error', { ...canonical(), result: { ...canonical().result, isError: true } }],
+    ['structured-content', { ...canonical(), result: { structuredContent: { status: sentinel } } }],
+    ['structured-fields', {
+      ...canonical(), result: { ...canonical().result, structuredContent: { status: 'error', secret: sentinel } },
+    }],
+    ['content-mismatch', {
+      ...canonical(), result: { ...canonical().result, content: [{ type: 'text', text: sentinel }] },
+    }],
+    ['expected-error-status', {
+      ...canonical('ok'), result: {
+        structuredContent: { status: 'ok', result: sentinel },
+        content: [{ type: 'text', text: JSON.stringify({ status: 'ok', result: sentinel }) }],
+      },
+    }],
+  ])('distinguishes %s without logging response values', async (reason, response) => {
+    const context: { check?: Record<string, unknown> } = {};
+    await expect(harness.acceptanceCheck(context, 'guest-failure', 'result-validation',
+      () => harness.assertCanonicalToolError(response, 9))).rejects.toThrow();
+    expect(context.check).toMatchObject({
+      step: 'guest-failure', phase: 'result-validation', status: 'failed', reason,
+    });
+    expect(JSON.stringify(context)).not.toContain(sentinel);
+    expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+  });
+
+  it('records canonical errors as passed and exposes only response-shape flags on failure', async () => {
+    const context: { check?: Record<string, unknown> } = {};
+    await harness.acceptanceCheck(context, 'guest-failure', 'result-validation',
+      () => harness.assertCanonicalToolError(canonical(), 9));
+    expect(context.check).toEqual({ step: 'guest-failure', phase: 'result-validation', status: 'passed' });
+    await expect(harness.acceptanceCheck(context, 'guest-failure', 'result-validation',
+      () => harness.assertCanonicalToolError({
+        ...canonical(), result: { ...canonical().result, isError: true },
+      }, 9))).rejects.toThrow();
+    expect(context.check?.response).toEqual({
+      present: true, jsonrpcValid: true, idMatches: true, rpcError: false, resultPresent: true,
+      rpcErrorClass: 'absent', toolIsError: true, structuredPresent: true,
+      structuredStatus: 'error', contentMatches: true,
+    });
+  });
+
+  it.each(['request', 'cleanup', 'resource-discovery', 'marker-wait', 'disconnect-validation'])(
+    'names the exact failed %s operation without emitting arbitrary exception text', async phase => {
+      const context: { check?: Record<string, unknown> } = {};
+      await expect(harness.acceptanceCheck(context, 'guest-cancellation', phase,
+        () => { throw new Error(sentinel); })).rejects.toThrow(sentinel);
+      expect(context.check).toEqual({
+        step: 'guest-cancellation', phase, status: 'failed', reason: 'operation-failed',
+      });
+      await harness.acceptanceCheck(context, 'guest-cancellation', 'request', () => undefined);
+      expect(context.check?.phase).toBe(phase);
+      expect(context.check?.status).toBe('failed');
+      expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+    },
+  );
+
+  it.each<[number, string]>([
+    [200, 'invalid-json'], [503, 'http-status'],
+  ])('retains HTTP %s and a safe transport reason for non-JSON responses', async (status, reason) => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(status);
+      response.end(sentinel);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as import('net').AddressInfo;
+    const context: { check?: Record<string, unknown> } = {};
+    try {
+      await expect(harness.acceptanceCheck(context, 'guest-failure', 'request',
+        () => harness.requestMcp(`http://127.0.0.1:${address.port}`, 'test-only', 9, 'tools/call', {})))
+        .rejects.toThrow();
+      expect(context.check).toEqual({
+        step: 'guest-failure', phase: 'request', status: 'failed', reason, httpStatus: status,
+      });
+      expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it.each([
+    ['oversized', 'response-too-large'],
+    ['stalled', 'request-timeout'],
+    ['interrupted', 'response-aborted'],
+  ])('keeps the %s transport cause even when socket teardown emits another error', async (kind, reason) => {
+    const server = http.createServer((request, response) => {
+      request.resume();
+      if (kind === 'oversized') response.end('x'.repeat(421 * 1024));
+      else if (kind === 'interrupted') {
+        response.writeHead(200, { 'content-length': '1000' });
+        response.write('{');
+        setImmediate(() => response.destroy());
+      }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as import('net').AddressInfo;
+    const context: { check?: Record<string, unknown> } = {};
+    try {
+      await expect(harness.acceptanceCheck(context, 'guest-timeout', 'request',
+        () => harness.requestMcp(`http://127.0.0.1:${address.port}`, 'test-only',
+          10, 'tools/call', {}, undefined, 100))).rejects.toThrow();
+      expect(context.check).toMatchObject({ phase: 'request', status: 'failed', reason });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('distinguishes an invalid-params RPC rejection and retains HTTP status without copying its message', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200);
+      response.end(JSON.stringify({
+        jsonrpc: '2.0', id: 9, error: { code: -32602, message: sentinel, data: sentinel },
+      }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as import('net').AddressInfo;
+    const context: { check?: Record<string, unknown> } = {};
+    try {
+      const result = await harness.requestMcp(
+        `http://127.0.0.1:${address.port}`, 'test-only', 9, 'tools/call', {},
+      );
+      await expect(harness.acceptanceCheck(context, 'guest-failure', 'result-validation',
+        () => harness.assertCanonicalToolError(result, 9))).rejects.toThrow();
+      expect(context.check).toMatchObject({
+        reason: 'jsonrpc-error', httpStatus: 200,
+        response: { rpcError: true, rpcErrorClass: 'invalid-params' },
+      });
+      expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
   });
 });
 

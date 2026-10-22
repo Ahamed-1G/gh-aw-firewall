@@ -17,6 +17,40 @@ const DIAGNOSTIC_NAME = /^([a-f0-9]{32})-([a-f0-9]{32})(?:\.proxy-debug)?\.json$
 const UPLOAD_NAME = /^(?:acceptance|invocation-[0-9]+|session-[0-9]+|proxy-[0-9]+)\.json$/;
 const MAX_RECORDS = 128;
 
+const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation'];
+const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-discovery',
+  'marker-wait', 'disconnect-validation'];
+const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version', 'request-id',
+  'jsonrpc-error', 'result-missing', 'tool-is-error', 'structured-content', 'structured-fields',
+  'content-mismatch', 'expected-error-status', 'http-status', 'invalid-json', 'response-too-large',
+  'request-timeout', 'request-failed', 'response-aborted', 'response-failed', 'disconnect-not-cancelled'];
+const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'resultPresent',
+  'toolIsError', 'structuredPresent', 'contentMatches'];
+
+function projectAcceptanceCheck(value) {
+  if (!value || !CHECK_STEPS.includes(value.step) || !CHECK_PHASES.includes(value.phase)
+      || !['started', 'passed', 'failed'].includes(value.status)) return undefined;
+  const result = { step: value.step, phase: value.phase, status: value.status };
+  if (CHECK_REASONS.includes(value.reason)) result.reason = value.reason;
+  if (Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599) {
+    result.httpStatus = value.httpStatus;
+  }
+  if (value.response && typeof value.response === 'object') {
+    result.response = {};
+    for (const key of RESPONSE_FLAGS) {
+      if (typeof value.response[key] === 'boolean') result.response[key] = value.response[key];
+    }
+    if (['ok', 'error', 'invalid', 'absent'].includes(value.response.structuredStatus)) {
+      result.response.structuredStatus = value.response.structuredStatus;
+    }
+    if (['parse-error', 'invalid-request', 'method-not-found', 'invalid-params',
+      'internal-error', 'server-error', 'other', 'absent'].includes(value.response.rpcErrorClass)) {
+      result.response.rpcErrorClass = value.response.rpcErrorClass;
+    }
+  }
+  return result;
+}
+
 function exportDirectory(kind, environment = process.env) {
   if (!['live', 'environment-probe'].includes(kind)
       || !/^[0-9]+$/.test(environment.GITHUB_RUN_ID || '')
@@ -143,7 +177,10 @@ function collect(context, acceptance) {
     && name.endsWith('.proxy-debug.json') && !baseline.proxyDebug.includes(name));
   const runIds = new Set([...journals.map(name => name.slice(0, 32)), ...proxyDebug.map(name => name.slice(0, 32))]);
   if (runIds.size > 8) throw new Error('Conformance diagnostic run count exceeds bound');
-  const files = [['acceptance.json', acceptance]];
+  const { check, ...acceptanceSummary } = acceptance;
+  const projectedCheck = projectAcceptanceCheck(check);
+  const files = [['acceptance.json', { ...acceptanceSummary,
+    ...(projectedCheck ? { check: projectedCheck } : {}) }]];
   let invocations = 0;
   let proxies = 0;
   let sessions = 0;
@@ -231,7 +268,8 @@ function publish(runDirectory, runnerUid, runnerGid, uid = 0, trustedRoot = '/')
   }
 }
 
-module.exports = { prepare, prepareForJob, collect, publish, exportDirectory, projectInvocation };
+module.exports = { prepare, prepareForJob, collect, publish, exportDirectory, projectInvocation,
+  projectAcceptanceCheck };
 
 if (require.main === module) {
   const [kind, runnerUid, runnerGid] = process.argv.slice(2);

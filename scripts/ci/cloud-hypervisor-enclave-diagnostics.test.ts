@@ -58,6 +58,33 @@ describe('public enclave conformance diagnostic retention', () => {
     fs.rmSync(temp, { recursive: true, force: true });
   });
 
+  it('reprojects the failed MCP step into the uploaded acceptance summary', () => {
+    const context = prepare();
+    diagnostics.collect(context, { status: 'failed', check: {
+      step: 'guest-failure', phase: 'result-validation', status: 'failed', reason: 'tool-is-error',
+      httpStatus: 200, message: secret, response: {
+        toolIsError: true, structuredStatus: 'error', contentMatches: true,
+        headers: secret, content: secret, error: secret,
+      },
+    } });
+    const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+    expect(summary.check).toEqual({
+      step: 'guest-failure', phase: 'result-validation', status: 'failed', reason: 'tool-is-error',
+      httpStatus: 200, response: { toolIsError: true, contentMatches: true, structuredStatus: 'error' },
+    });
+    expect(records()).not.toContain(secret);
+  });
+
+  it('drops arbitrary check fields and rejects unknown step identities', () => {
+    expect(diagnostics.projectAcceptanceCheck({
+      step: secret, phase: 'request', status: 'failed',
+    })).toBeUndefined();
+    expect(diagnostics.projectAcceptanceCheck({
+      step: 'guest-timeout', phase: 'request', status: 'failed', reason: secret,
+      httpStatus: 999, response: { present: secret, structuredStatus: secret },
+    })).toEqual({ step: 'guest-timeout', phase: 'request', status: 'failed', response: {} });
+  });
+
   it.each(['passed', 'failed'])('retains public script and agent evidence outside the deleted fixture on %s', status => {
     const context = prepare();
     invocation();
