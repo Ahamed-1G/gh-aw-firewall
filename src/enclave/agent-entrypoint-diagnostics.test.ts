@@ -15,6 +15,7 @@ const entrypoint = path.join(
 const harness = String.raw`
 import errno
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -30,13 +31,54 @@ module.SEED_DIR = root / "seed"
 module.TASK_PATH = root / "task.txt"
 module.SCHEMA_PATH = root / "schema.json"
 module.OUT_PATH = root / "out"
+module.OUTPUT_DIR = root
 module.SESSION_LOG_PATH = root / "session.jsonl"
 module.AGENT_DIR = root / "agent"
 module.TEMP_DIR = root / "tmp"
 module.SHARED_MEMORY_DIR = root / "shm"
 module.COPILOT_BIN = str(root / "copilot")
 module.GITHUB_AGENT_ID_PATH = root / "github-agent-id"
+module.GITHUB_BEARER_PATH = root / "github-bearer"
 module.GITHUB_MCP_CONFIG_PATH = module.AGENT_DIR / "github-mcp.json"
+
+if scenario.startswith("session-log-"):
+    def fail():
+        raise OSError(errno.ENOSPC, os.environ["TEST_API_TOKEN"], os.environ["PRIVATE_PATH"])
+    class Handle:
+        def write(self, data):
+            if scenario.startswith("session-log-write"):
+                fail()
+        def close(self):
+            if scenario == "session-log-close":
+                fail()
+    class Log:
+        def stat(self):
+            if scenario == "session-log-stat":
+                fail()
+            return type("Stat", (), {"st_size": 0})()
+        def open(self, mode):
+            if scenario == "session-log-open":
+                fail()
+            return Handle()
+    module.SESSION_LOG_PATH = Log()
+    original_stderr = module.sys.stderr
+    captured = io.StringIO()
+    module.sys.stderr = captured
+    if scenario == "session-log-write-operation":
+        module.safe_os_error(
+            OSError(errno.EACCES, os.environ["TEST_API_TOKEN"], os.environ["PRIVATE_PATH"]),
+            "output-read-open",
+        )
+    elif scenario == "session-log-write-failure":
+        module.append_event({"event": "failure", "category": "result-empty"})
+    else:
+        module.append_event({"event": "success"})
+    module.sys.stderr = original_stderr
+    print(json.dumps({
+        "exitCode": 0, "transcript": captured.getvalue(),
+        "transcriptBytes": len(captured.getvalue()), "output": "",
+    }))
+    raise SystemExit(0)
 
 if scenario == "github-config":
     module.AGENT_DIR.mkdir()
@@ -100,7 +142,46 @@ module.SHARED_MEMORY_DIR.mkdir()
 module.TASK_PATH.write_text(os.environ["PRIVATE_TASK"], encoding="utf-8")
 module.SCHEMA_PATH.write_text('{"type":"boolean"}', encoding="utf-8")
 module.OUT_PATH.write_text("", encoding="utf-8")
+module.OUT_PATH.chmod(0o600)
 module.SESSION_LOG_PATH.write_text("", encoding="utf-8")
+module.GITHUB_AGENT_ID_PATH.write_text(os.environ["TEST_GITHUB_AGENT_ID"], encoding="ascii")
+module.GITHUB_BEARER_PATH.write_text("private-delegated-bearer-sentinel", encoding="ascii")
+
+if scenario == "injected-io":
+    original_operation = module.file_operation
+    def injected_operation(operation, action, *, fatal=True):
+        if operation != os.environ["FAULT_OPERATION"]:
+            return original_operation(operation, action, fatal=fatal)
+        def fail():
+            if operation.endswith("-close"):
+                action()
+            raise OSError(
+                int(os.environ.get("FAULT_ERRNO", str(errno.EIO))),
+                "unsafe detail " + os.environ["TEST_API_TOKEN"],
+                os.environ["PRIVATE_PATH"],
+            )
+        return original_operation(operation, fail, fatal=fatal)
+    module.file_operation = injected_operation
+
+original_engine_result = module.append_engine_result
+def engine_result(completed):
+    if scenario == "output-oversized":
+        module.OUT_PATH.write_bytes(b"x" * 1025)
+    elif scenario == "output-at-limit":
+        module.OUT_PATH.write_bytes(b" " * 1020 + b"true")
+    elif scenario == "output-invalid-utf8":
+        module.OUT_PATH.write_bytes(b"\xff")
+    elif scenario == "output-whitespace":
+        module.OUT_PATH.write_bytes(b" \n\t ")
+    elif scenario == "output-missing":
+        module.OUT_PATH.unlink()
+    elif scenario == "output-directory":
+        module.OUT_PATH.unlink()
+        module.OUT_PATH.mkdir()
+    elif scenario == "output-mode":
+        module.OUT_PATH.chmod(0o640)
+    return original_engine_result(completed)
+module.append_engine_result = engine_result
 
 if scenario != "missing-copilot":
     copilot = Path(module.COPILOT_BIN)
@@ -148,7 +229,8 @@ print(json.dumps({
     "exitCode": exit_code,
     "transcript": transcript,
     "transcriptBytes": len(transcript.encode("utf-8")),
-    "output": module.OUT_PATH.read_text(encoding="utf-8"),
+    "output": module.OUT_PATH.read_text(encoding="utf-8", errors="replace")
+        if module.OUT_PATH.is_file() else "",
     "arguments": (root / "copilot-args").read_text(encoding="utf-8")
         if (root / "copilot-args").exists() else "",
 }))
@@ -381,11 +463,11 @@ describe('enclave agent protected entrypoint diagnostics', () => {
     const result = runHarness('stdout-only');
     const transcript = events(result);
 
-    expect(result.exitCode).toBe(30);
+    expect(result.exitCode).toBe(33);
     expect(result.output).toBe('');
     expect(transcript).toContainEqual({
       event: 'failure',
-      category: 'result-write-failed',
+      category: 'result-empty',
     });
     expect(result.transcript).not.toContain('test-model');
     expect(transcript).toContainEqual(expect.objectContaining({
@@ -404,10 +486,122 @@ describe('enclave agent protected entrypoint diagnostics', () => {
     }));
     expect(transcript[transcript.length - 1]).toEqual({
       event: 'failure',
-      category: 'result-write-failed',
+      category: 'result-empty',
     });
   });
 
+  it.each<[string, number, string]>([
+    ['stdout-only', 33, 'result-empty'],
+    ['output-oversized', 34, 'result-too-large'],
+    ['output-invalid-utf8', 35, 'result-invalid-utf8'],
+    ['output-whitespace', 36, 'result-whitespace-only'],
+    ['output-missing', 32, 'result-read-failed'],
+    ['output-directory', 32, 'result-read-failed'],
+  ])('distinguishes %s without attempting the final write', (scenario, exitCode, category) => {
+    const result = runHarness(scenario);
+    const transcript = events(result);
+    expect(result.exitCode).toBe(exitCode);
+    expect(transcript[transcript.length - 1]).toEqual({ event: 'failure', category });
+    expect(transcript).not.toContainEqual(expect.objectContaining({
+      stage: 'output-write-attempt',
+    }));
+    expect(result.transcript).not.toContain('private prompt sentinel');
+    expect(result.transcript).not.toContain('test-secret-token-value');
+  });
+
+  it('accepts output exactly at the configured byte limit', () => {
+    const result = runHarness('output-at-limit');
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe('true');
+  });
+
+  it.each(
+    ['output-reset', 'output-read', 'output-write'].flatMap(operation =>
+      ['', '-open', '-close'].map(suffix => [operation + suffix, operation])),
+  )('identifies the exact failed file operation %s', (operation, phase) => {
+    const result = runHarness('injected-io', { FAULT_OPERATION: operation, FAULT_ERRNO: '28' });
+    const transcript = events(result);
+    expect(result.exitCode).toBe(phase === 'output-reset' ? 37 : phase === 'output-read' ? 32 : 30);
+    expect(transcript).toContainEqual(expect.objectContaining({
+      event: 'operation-error', operation, errno: 28, category: 'no-space', fatal: true,
+    }));
+    expect(transcript[transcript.length - 1]).toEqual({
+      event: 'failure',
+      category: phase === 'output-reset' ? 'result-reset-failed'
+        : phase === 'output-read' ? 'result-read-failed' : 'result-write-failed',
+    });
+    expect(result.transcript).not.toContain('test-secret-token-value');
+    expect(result.transcript).not.toContain('/private/repository/secret-path');
+  });
+
+  it.each([
+    ['task-input-read-open', 11, {}],
+    ['schema-input-read', 11, {}],
+    ['github-agent-id-read', 10, {
+      AWF_ENCLAVE_AGENT_GITHUB_ENABLED: 'true',
+      AWF_ENCLAVE_AGENT_GITHUB_PROFILE: 'issues-read-v1',
+      AWF_ENCLAVE_AGENT_GITHUB_MCP_URL: 'http://172.31.0.40:8080/mcp/github',
+    }],
+    ['github-mcp-config-chmod', 10, {
+      AWF_ENCLAVE_AGENT_GITHUB_ENABLED: 'true',
+      AWF_ENCLAVE_AGENT_GITHUB_PROFILE: 'issues-read-v1',
+      AWF_ENCLAVE_AGENT_GITHUB_MCP_URL: 'http://172.31.0.40:8080/mcp/github',
+    }],
+  ] as Array<[string, number, Record<string, string>]>)(
+    'identifies input/configuration file operation %s', (operation, exitCode, extraEnv) => {
+      const result = runHarness('injected-io', { FAULT_OPERATION: operation, ...extraEnv });
+      expect(result.exitCode).toBe(exitCode);
+      expect(events(result)).toContainEqual(expect.objectContaining({
+        event: 'operation-error', operation, category: 'io-error',
+      }));
+      expect(result.transcript).not.toContain('test-secret-token-value');
+      expect(result.transcript).not.toContain('/private/repository/secret-path');
+    },
+  );
+
+  it('records post-engine output ownership, mode, access and size state without result contents', () => {
+    const result = runHarness('output-mode');
+    expect(events(result)).toContainEqual(expect.objectContaining({
+      event: 'output-snapshot', stage: 'after-engine',
+      uid: process.getuid!(), gid: process.getgid!(),
+      paths: expect.arrayContaining([expect.objectContaining({
+        path: 'output-file', type: 'file', uid: process.getuid!(), gid: process.getgid!(),
+        mode: 0o640, readable: true, size: 'within-limit',
+      })]),
+    }));
+    expect(result.transcript).not.toContain('"result":"true"');
+  });
+
+  it.each(['stat', 'open', 'write', 'close'])(
+    'reports session-log %s failures through safe stderr without recursion',
+    operation => {
+      const result = runHarness(`session-log-${operation}`);
+      expect(events(result)).toContainEqual(expect.objectContaining({
+        event: 'operation-error', operation: `session-log-${operation}`, category: 'no-space', fatal: false,
+      }));
+      expect(result.transcript).not.toContain('test-secret-token-value');
+      expect(result.transcript).not.toContain('/private/repository/secret-path');
+    },
+  );
+
+  it('preserves the original operation failure when writing its diagnostic also fails', () => {
+    const result = runHarness('session-log-write-operation');
+    expect(events(result)).toEqual([
+      expect.objectContaining({ operation: 'session-log-write', category: 'no-space', fatal: false }),
+      { event: 'operation-error', operation: 'output-read-open',
+        category: 'permission-denied', errno: 13, fatal: true },
+    ]);
+    expect(result.transcript).not.toContain('test-secret-token-value');
+    expect(result.transcript).not.toContain('/private/repository/secret-path');
+  });
+
+  it('preserves the result failure category when writing its diagnostic also fails', () => {
+    const result = runHarness('session-log-write-failure');
+    expect(events(result)).toEqual([
+      expect.objectContaining({ operation: 'session-log-write', category: 'no-space', fatal: false }),
+      { event: 'failure', category: 'result-empty' },
+    ]);
+  });
   it('withholds raw engine stdout/stderr from the transcript by default', () => {
     const result = runHarness('success');
     const transcript = events(result);

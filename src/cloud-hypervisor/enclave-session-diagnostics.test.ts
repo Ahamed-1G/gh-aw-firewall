@@ -66,6 +66,61 @@ describe('bounded guest session evidence', () => {
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(8192);
   });
 
+  it('retains exact late file failures and output metadata independently of the event cap', async () => {
+    await write([
+      { event: 'operation-error', operation: 'resource-memory.peak-read-open',
+        category: 'not-found', errno: 2, fatal: false },
+      ...Array.from({ length: 40 }, () => ({ event: 'progress', stage: 'engine-started' })),
+      { event: 'output-snapshot', stage: 'after-engine', uid: 65534, gid: 65534,
+        paths: [
+          { path: 'output-parent', type: 'directory', uid: 0, gid: 0, mode: 0o755, writable: false },
+          { path: 'output-file', type: 'file', uid: 65534, gid: 65534, mode: 0o600,
+            readable: true, writable: true, size: 'empty', bytes: 123, raw: 'PRIVATE_RESULT' },
+          { path: 'PRIVATE_PATH', type: 'file', uid: 123, gid: 456, mode: 0o777 },
+        ] },
+      { event: 'operation-error', operation: 'output-read-open', category: 'permission-denied',
+        errno: 13, fatal: true, strerror: 'PRIVATE_ERROR', filename: 'PRIVATE_PATH' },
+      { event: 'failure', category: 'result-read-failed' },
+    ]);
+    const result = await read();
+    expect(result.events).toHaveLength(32);
+    expect(result.failure).toEqual({
+      event: 'operation-error', operation: 'output-read-open',
+      category: 'permission-denied', errno: 13, fatal: true,
+    });
+    expect(result.operationErrors).toHaveLength(2);
+    expect(result.lastEvent).toEqual({ event: 'failure', category: 'result-read-failed' });
+    expect(result.output).toEqual({
+      stage: 'after-engine', uid: 65534, gid: 65534,
+      paths: [
+        { path: 'output-parent', type: 'directory', uid: 0, gid: 0, mode: 0o755, writable: false },
+        { path: 'output-file', type: 'file', uid: 65534, gid: 65534, mode: 0o600,
+          readable: true, writable: true, size: 'empty' },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(8192);
+  });
+
+  it('bounds file-error retention and rejects arbitrary operations, identities, modes and output sizes', async () => {
+    await write([
+      ...Array.from({ length: 40 }, () => ({
+        event: 'operation-error', operation: 'output-write-close', category: 'no-space', errno: 28,
+      })),
+      { event: 'operation-error', operation: 'PRIVATE_PATH', category: 'no-space' },
+      { event: 'output-snapshot', stage: 'after-engine', uid: 123, gid: 'PRIVATE_GID',
+        paths: [{ path: 'output-file', type: 'file', uid: 123, gid: 'PRIVATE_GID',
+          mode: 0o10000, size: 'PRIVATE_SIZE', raw: 'PRIVATE_RESULT' }] },
+    ]);
+    const result = await read();
+    expect(result.operationErrors).toHaveLength(16);
+    expect(result.output).toEqual({
+      stage: 'after-engine', uid: 'other', gid: 'other',
+      paths: [{ path: 'output-file', type: 'file', uid: 'other', gid: 'other' }],
+    });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+  });
+
   it('hands stopped public-session text only to the protected sink, not the audit projection', async () => {
     await write([
       { event: 'engine-result', exitCode: 1, stderr: { raw: 'PUBLIC_ENGINE_FAILURE' } },

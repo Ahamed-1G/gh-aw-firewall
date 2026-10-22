@@ -97,6 +97,8 @@ function projectInvocation(value) {
     }
     const events = [...session.events];
     if (session.failure) events.push(session.failure);
+    if (Array.isArray(session.operationErrors)) events.push(...session.operationErrors.slice(-16));
+    if (session.output) events.push({ ...session.output, event: 'output-snapshot' });
     if (session.resources) {
       events.push({
         ...session.resources, event: 'resource-snapshot',
@@ -114,8 +116,17 @@ function projectInvocation(value) {
   } else if (session !== undefined) {
     throw new Error('Invalid conformance session diagnostic');
   }
+  const wrapperFailure = value.guestWrapperFailure
+    ? projectEnclaveSessionDiagnostics(Buffer.from(JSON.stringify(value.guestWrapperFailure))).lastEvent
+    : undefined;
   return { schemaVersion: 1, executorKind: value.executorKind,
     sequence: value.sequence, elapsedMs: value.elapsedMs, checks, milestones,
+    ...(Array.isArray(value.guestFileOperations) ? {
+      guestFileOperations: projectEnclaveSessionDiagnostics(Buffer.from(
+        value.guestFileOperations.slice(-16).map(event => JSON.stringify(event) + '\n').join(''),
+      )).operationErrors ?? [],
+    } : {}),
+    ...(wrapperFailure?.event === 'failure' ? { guestWrapperFailure: wrapperFailure } : {}),
     ...(guestSession ? { guestSession } : {}) };
 }
 

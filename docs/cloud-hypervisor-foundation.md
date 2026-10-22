@@ -1724,6 +1724,42 @@ resource cleanup still preserves private recovery state only on the runner.
 Collection errors fail the harness without skipping that cleanup or falling
 back to uploading raw files. Abrupt host termination cannot guarantee capture.
 
+#### Distinguishing agent-enclave result and file-operation failures
+
+The agent wrapper reserves `result-write-failed` (exit 30) for the final
+normalized-output write. Result reads, empty output, oversized output, invalid
+UTF-8, whitespace-only output, and the initial output reset have distinct
+categories and exit statuses: `result-read-failed` (32), `result-empty` (33),
+`result-too-large` (34), `result-invalid-utf8` (35),
+`result-whitespace-only` (36), and `result-reset-failed` (37).
+Exit 31 retains its existing model-loop meaning. Docker's protected audit maps
+the new statuses without changing the caller's canonical error response.
+
+Wrapper-managed input, GitHub configuration, output and diagnostic file I/O
+records the exact logical operation, including separate `-open` and `-close`
+phases, and numeric errno with a fixed error category. In particular,
+`output-read-open`, `output-read`, and `output-read-close` no longer require
+guessing which part of the read failed. A buffered write can fail during
+`output-write-close`; this is distinct from `output-write` itself.
+No exception message or arbitrary filename enters the public projection.
+Best-effort observation failures have `fatal: false` and do not replace the
+invocation's first fatal failure. If the transcript's stat, open, write or
+close fails, the wrapper emits the same safe operation record on stderr;
+it also preserves the original operation error or terminal failure rather than
+replacing it with the logging failure. The host projects a bounded 16 KiB capture
+into `guestFileOperations` and `guestWrapperFailure`.
+
+Before and after engine execution, `output-snapshot` observes the process
+identity, output parent/export directories, result symlink and resolved result.
+Retained `output` metadata includes file type, permission bits, access checks
+and only an empty/within-limit/oversized size category, not result contents or
+byte counts. UID/GID values other than root (0) and the fixed guest (65534)
+become `other` in the public projection; link targets and arbitrary paths are
+never copied. The latest snapshot and last 16 operation errors survive the
+32-event milestone cap and are revalidated by the CI collector before upload.
+These observations do not change permissions or prove which operation a
+Copilot tool attempted; wrapper I/O and tool I/O remain distinct.
+
 #### Distinguishing agent-enclave authentication failures
 
 Candidate run [39697934942](https://github.com/github/gh-aw-firewall/actions/runs/39697934942)

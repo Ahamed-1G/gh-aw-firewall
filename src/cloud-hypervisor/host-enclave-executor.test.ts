@@ -428,6 +428,9 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
                 stderrBytes: 0, pendingFrameBytes: 0, resultReceived: false,
               });
               if (role === 'agent') {
+                request.stderr?.write('{"event":"operation-error","operation":"session-log-close",'
+                  + '"category":"no-space","errno":28,"fatal":false,"filename":"PRIVATE_SESSION_TOKEN"}\n');
+                request.stderr?.write('{"event":"failure","category":"result-empty","message":"PRIVATE_SESSION_TOKEN"}\n');
                 await fs.writeFile(path.join(invocationHostDir, 'runtime', 'session.jsonl'),
                   '{"event":"progress","stage":"engine-started","secret":"PRIVATE_SESSION_TOKEN"}\n');
               }
@@ -559,6 +562,10 @@ describe('readBoundedCloudHypervisorEnclaveResult', () => {
           expect(evidence.guestSession).toMatchObject({
             status: 'captured', lastEvent: { event: 'progress', stage: 'engine-started' },
           });
+          expect(evidence.guestFileOperations).toEqual([{
+            event: 'operation-error', operation: 'session-log-close', category: 'no-space', errno: 28, fatal: false,
+          }]);
+          expect(evidence.guestWrapperFailure).toEqual({ event: 'failure', category: 'result-empty' });
           expect(file.contents).not.toContain('PRIVATE_SESSION_TOKEN');
           expect(evidence.guestExecution).toMatchObject({ phase: 'sending', resultReceived: false });
           managerExecuteError = true;

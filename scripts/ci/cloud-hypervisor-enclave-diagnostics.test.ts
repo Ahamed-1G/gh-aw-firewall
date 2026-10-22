@@ -148,6 +148,41 @@ describe('public enclave conformance diagnostic retention', () => {
     expect(records()).toContain('"stage":"gateway setup"');
   });
 
+  it('revalidates late output metadata and exact file errors at upload, including broken-transcript fallback', () => {
+    const context = prepare();
+    const file = invocation();
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.guestSession = projectEnclaveSessionDiagnostics(Buffer.from([
+      ...Array.from({ length: 40 }, () => ({ event: 'progress', stage: 'engine-started' })),
+      { event: 'output-snapshot', stage: 'after-engine', uid: 65534, gid: 65534,
+        paths: [{ path: 'output-file', type: 'file', uid: 65534, gid: 65534,
+          mode: 0o600, readable: true, size: 'empty', contents: secret }] },
+      { event: 'operation-error', operation: 'output-read-close', category: 'io-error', errno: 5, fatal: true },
+      { event: 'failure', category: 'result-read-failed' },
+    ].map(event => JSON.stringify(event)).join('\n')));
+    value.guestFileOperations = [{
+      event: 'operation-error', operation: 'session-log-write', category: 'no-space',
+      errno: 28, fatal: false, filename: secret,
+    }, { event: 'operation-error', operation: secret, category: 'os-error' }];
+    value.guestSession.output.paths[0].contents = secret;
+    value.guestWrapperFailure = { event: 'failure', category: 'result-empty', message: secret };
+    write(file, value);
+    diagnostics.collect(context, { status: 'failed', stage: 'resource-limit checks' });
+    const retained = JSON.parse(fs.readFileSync(path.join(output, 'upload', 'invocation-1.json'), 'utf8'));
+    expect(retained.guestSession.lastEvent.category).toBe('result-read-failed');
+    expect(retained.guestSession.operationErrors).toContainEqual({
+      event: 'operation-error', operation: 'output-read-close', category: 'io-error', errno: 5, fatal: true,
+    });
+    expect(retained.guestSession.output.paths[0]).toMatchObject({
+      path: 'output-file', uid: 65534, gid: 65534, mode: 0o600, size: 'empty',
+    });
+    expect(retained.guestFileOperations).toEqual([{
+      event: 'operation-error', operation: 'session-log-write', category: 'no-space', errno: 28, fatal: false,
+    }]);
+    expect(retained.guestWrapperFailure).toEqual({ event: 'failure', category: 'result-empty' });
+    expect(records()).not.toContain(secret);
+  });
+
   it.each([8, 9])('enforces the exact eight-run bound (%s runs)', count => {
     const context = prepare();
     for (let index = 0; index < count; index++) {

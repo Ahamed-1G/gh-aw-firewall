@@ -19,7 +19,8 @@ import {
 } from '../enclave/host-executor-journal';
 import { HostPreflightReporter, markHostPreflightError } from './host-preflight-progress';
 import { guestExecutionFailureReason } from '../microvm/vsock-client';
-import { readEnclaveSessionDiagnostics } from './enclave-session-diagnostics';
+import { projectEnclaveSessionDiagnostics, readEnclaveSessionDiagnostics } from './enclave-session-diagnostics';
+import { Writable } from 'stream';
 import { preservePublicEnclaveSession } from './diagnostics';
 import { DurableCloudHypervisorCleanupRegistry } from './cleanup-registry';
 import {
@@ -301,6 +302,19 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       return { outcome: 'executor-failure' };
     }
     const diagnostic = new HostExecutorInvocationDiagnostics(this.options.runState, plan);
+    const stderrChunks: Buffer[] = [];
+    let stderrBytes = 0;
+    const wrapperStderr = new Writable({
+      write(chunk: Buffer, _encoding, callback) {
+        const remaining = 16 * 1024 - stderrBytes;
+        if (remaining > 0) {
+          const bytes = Buffer.from(chunk.subarray(0, remaining));
+          stderrChunks.push(bytes);
+          stderrBytes += bytes.length;
+        }
+        callback();
+      },
+    });
     const report = new HostPreflightReporter(
       'host-invocation',
       diagnostic.publish,
@@ -555,6 +569,7 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
           ...(debugDirectory ? { AWF_ENCLAVE_AGENT_DEBUG_RAW_SESSION_LOGS: 'true' } : {}),
         } : {},
         onDiagnostics: diagnostic.guestExecution,
+        ...(role === 'agent' ? { stderr: wrapperStderr } : {}),
       }).catch((error: unknown) => {
         const reason = guestExecutionFailureReason(error);
         throw reason ? markHostPreflightError(error, reason) : error;
@@ -642,6 +657,9 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
       }
       if (role === 'agent' && managerStopped && filesystemState.mounted) {
         try {
+          if (stderrBytes) {
+            diagnostic.guestFileOperations(projectEnclaveSessionDiagnostics(Buffer.concat(stderrChunks)));
+          }
           await resourceJournal?.verifyMount();
           diagnostic.guestSession(await (dependencies.readSessionDiagnostics ?? readEnclaveSessionDiagnostics)(
             plan.invocationHostDir,

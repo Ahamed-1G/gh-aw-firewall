@@ -262,6 +262,8 @@ export class HostExecutorInvocationDiagnostics {
     cleanupFailure?: { stage: string; reason: string; code: string; errorType: string; sequence: number };
     guestExecution?: GuestExecutionDiagnostics;
     guestSession?: EnclaveSessionDiagnostics;
+    guestFileOperations?: EnclaveSessionDiagnostics['operationErrors'];
+    guestWrapperFailure?: EnclaveSessionDiagnostics['lastEvent'];
   };
 
   constructor(run: HostExecutorRunState, plan: HostExecutorInvocationPlan) {
@@ -299,6 +301,15 @@ export class HostExecutorInvocationDiagnostics {
 
   guestSession(value: EnclaveSessionDiagnostics): void {
     this.snapshot.guestSession = value;
+    this.commit();
+  }
+
+  guestFileOperations(value: EnclaveSessionDiagnostics): void {
+    const failure = value.lastEvent?.event === 'failure' ? value.lastEvent
+      : value.failure?.event === 'failure' ? value.failure : undefined;
+    if (!value.operationErrors?.length && !failure) return;
+    if (value.operationErrors?.length) this.snapshot.guestFileOperations = value.operationErrors;
+    if (failure) this.snapshot.guestWrapperFailure = failure;
     this.commit();
   }
 
