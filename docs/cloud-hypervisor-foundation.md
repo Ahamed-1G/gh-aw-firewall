@@ -1782,6 +1782,27 @@ acceptance evidence; normal schema/result checks and resource limits are unchang
 
 #### Distinguishing acceptance MCP errors from expected guest failures
 
+For cancellation discovery failures, distinguish these hypotheses rather than
+interpreting a canonical error as proof of guest execution:
+
+| Hypothesis | Discriminating evidence |
+| --- | --- |
+| A prior nonzero exit closed host admissions | Host control `admissionClosure` records the outcome and explicit/absent `cleanupComplete` and `recoverableFailure` markers; a later `closed` rejection confirms admission stopped. |
+| A socket/protocol/settlement failure closed the broker lane | Protected host-client phase/reason records and handler `accepting`/`laneClosed` flags distinguish host rejection from broker failure. |
+| A budget, request-validation or busy decision prevented launch | Protected admission reasons distinguish tool-call cap, invocation cap, disclosure budget, validation and busy rejection without copying request details. |
+| Timeout/cancellation received an unrelated early error | Request-completion records retain finite response-shape/status metadata even when transport succeeds. A passed request is not proof of guest execution or timeout. |
+| Resource discovery filtered out a real invocation | Successive zero/one/many candidate buckets identify existing-record, pending-state, owner, storage-directory, identity and snapshot filters. |
+
+Public-only conformance checks snapshot the protected broker audit and host
+control diagnostics before fixture cleanup as `AWF_ENCLAVE_ADMISSION_EVIDENCE`.
+The latest snapshot and last 16 check records enter `acceptance.json` only after
+reprojection. Each evidence source retains at most 32 events and 16 failures;
+missing, invalid and unreadable sources remain explicit, not inferred success.
+Host admission closure survives the ordinary control-event cap. No raw audit
+detail, IDs, paths, owner PIDs, request/result values or credentials are copied.
+Discovery timeouts and inventory-read failures have separate reason codes.
+These diagnostics do not relax admission closure or change acceptance criteria.
+
 The live conformance harness emits `AWF_ENCLAVE_ACCEPTANCE_CHECK` records for
 the agent ENOSPC, script ENOSPC, guest OOM, and deliberate guest failure,
 timeout and cancellation probes. Each record names

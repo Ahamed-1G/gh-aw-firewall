@@ -164,6 +164,8 @@ interface InvocationRecord {
   interruptedOutcome?: 'cancelled' | 'timeout';
   deadline?: NodeJS.Timeout;
   lease?: NodeJS.Timeout;
+  backendCleanupComplete?: boolean;
+  backendRecoverableFailure?: boolean;
 }
 
 class RequestRejection extends Error {
@@ -371,6 +373,12 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
     record.resultDigest = digest;
     record.state = 'terminal';
     if (finalOutcome === 'executor-failure' && !recoverableFailure) {
+      diagnostics.record('admissions-closed', undefined, 'closed', record.plan.invocationId,
+        undefined, {
+          outcome: finalOutcome,
+          cleanupComplete: record.backendCleanupComplete ?? 'absent',
+          recoverableFailure: record.backendRecoverableFailure ?? 'absent',
+        });
       admissionsOpen = false;
       for (const other of invocations.values()) interrupt(other, 'cancelled');
     }
@@ -442,6 +450,8 @@ export async function startHostExecutorServer(options: HostExecutorServerOptions
       })
       .then(
         (outcome) => {
+          record.backendCleanupComplete = outcome?.cleanupComplete;
+          record.backendRecoverableFailure = outcome?.recoverableFailure;
           diagnostics.record('backend-complete', undefined, undefined, plan.invocationId);
           if (outcome?.cleanupComplete === false) {
             cleanupFailed();

@@ -537,6 +537,9 @@ describe('finite-disclosure broker → authenticated Unix host → concrete micr
     expect(await call(peer, args(role === 'script' ? 'agent' : 'script'))).toBe('{"status":"error"}');
     expect(requests).toHaveLength(count);
     expect(plans).toHaveLength(0);
+    expect(auditLifecycle).toHaveBeenCalledWith('invocation-timing', expect.objectContaining({
+      phase: 'admission', status: 'rejected', reason: 'admissions-closed', laneClosed: true,
+    }));
   });
 
   it('rejects an invalid capability during startup without launching a VM', async () => {

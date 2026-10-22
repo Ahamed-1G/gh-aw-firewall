@@ -687,6 +687,28 @@ describe('host executor server', () => {
     expect(executions).toHaveLength(2);
   });
 
+  it('retains the missing recovery markers when an ordinary backend failure closes admissions', async () => {
+    await start();
+    const broker = client();
+    await broker.invoke(invokeArgs);
+    pending[0].resolve({ outcome: 'executor-failure' });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(await broker.invoke({
+      ...invokeArgs, invocationId: '1'.repeat(24), admissionId: '2'.repeat(24),
+    })).toMatchObject({ ok: false, error: 'closed' });
+    const directory = path.join(root, 'host-executor-journal', 'diagnostics');
+    const values = fs.readdirSync(directory).map(name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')));
+    const control = values.find(value => value.component === 'host-executor-control');
+    expect(control.admissionClosure).toMatchObject({
+      phase: 'admissions-closed', reason: 'closed', outcome: 'executor-failure',
+      cleanupComplete: 'absent', recoverableFailure: 'absent',
+    });
+    expect(control.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'request-rejected', reason: 'closed' }),
+    ]));
+    expect(JSON.stringify(control.admissionClosure)).not.toMatch(/print\(1\)|private|payload|capability/);
+  });
+
   it.each([
     { cleanupComplete: false, state: 'cancelling' },
     { cleanupComplete: undefined, state: 'terminal' },

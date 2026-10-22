@@ -39,11 +39,10 @@ function assertReleaseAssets(required, published) {
 const mcpFailures = new WeakMap();
 const mcpResponses = new WeakMap();
 
-function mcpFailure(reason, response, requestId, httpStatus) {
-  const error = new Error('Public enclave MCP request failed');
+function mcpResponseMetadata(response, requestId, httpStatus) {
   const structured = response?.result?.structuredContent;
-  mcpFailures.set(error, {
-    reason, httpStatus: httpStatus ?? (response && typeof response === 'object'
+  return {
+    httpStatus: httpStatus ?? (response && typeof response === 'object'
       ? mcpResponses.get(response) : undefined),
     ...(response === undefined ? {} : { response: {
       present: !!response,
@@ -65,7 +64,12 @@ function mcpFailure(reason, response, requestId, httpStatus) {
         && response.result.content[0]?.type === 'text'
         && response.result.content[0].text === JSON.stringify(structured),
     } }),
-  });
+  };
+}
+
+function mcpFailure(reason, response, requestId, httpStatus) {
+  const error = new Error('Public enclave MCP request failed');
+  mcpFailures.set(error, { reason, ...mcpResponseMetadata(response, requestId, httpStatus) });
   return error;
 }
 
@@ -74,12 +78,21 @@ async function acceptanceCheck(context, step, phase, action) {
     const check = conformanceDiagnostics.projectAcceptanceCheck({ step, phase, status, ...details });
     if (!check) throw new Error('Invalid acceptance diagnostic step');
     if (context.check?.status !== 'failed') context.check = check;
+    context.checks = [...(context.checks || []), check].slice(-16);
     console.log(`AWF_ENCLAVE_ACCEPTANCE_CHECK ${JSON.stringify(check)}`);
+    if (context.observeAdmission && (status === 'failed' || (phase === 'request' && status === 'passed'))) {
+      context.admissionEvidence = conformanceDiagnostics.projectAdmissionEvidence(context.observeAdmission());
+      console.log(`AWF_ENCLAVE_ADMISSION_EVIDENCE ${JSON.stringify({
+        step, phase, ...context.admissionEvidence,
+      })}`);
+    }
   };
   record('started');
   try {
     const result = await action();
-    record('passed');
+    const requestId = { 'agent-enospc': 6, 'script-enospc': 7, 'guest-oom': 8,
+      'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11 }[step];
+    record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId) : {});
     return result;
   } catch (error) {
     record('failed', mcpFailures.get(error) || { reason: 'operation-failed' });
@@ -1338,20 +1351,48 @@ function resourceRecords(directory) {
     });
 }
 
-async function waitForInvocationRecord(directory, existing, ownerPid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const record = resourceRecords(directory).find(({ file, record: value }) =>
-      !existing.has(file)
-      && value.state === 'pending'
-      && value.owner?.pid === ownerPid
-      && value.storage?.directory
-      && value.directoryIdentity
-      && value.snapshot);
-    if (record) return record;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+function observeInvocationRecords(records, existing, ownerPid) {
+  const counts = {};
+  let candidates = records.filter(({ file }) => !existing.has(file));
+  const bucket = count => count === 0 ? 'zero' : count === 1 ? 'one' : 'many';
+  counts.newRecords = bucket(candidates.length);
+  for (const [key, predicate] of [
+    ['pending', value => value.state === 'pending'],
+    ['ownerMatches', value => value.owner?.pid === ownerPid],
+    ['directoryReady', value => Boolean(value.storage?.directory)],
+    ['identityReady', value => Boolean(value.directoryIdentity)],
+    ['snapshotReady', value => Boolean(value.snapshot)],
+  ]) {
+    candidates = candidates.filter(({ record }) => predicate(record));
+    counts[key] = bucket(candidates.length);
   }
-  throw new Error('Live enclave crash probe did not persist its pending resource identity');
+  counts.eligible = bucket(candidates.length);
+  return { counts, record: candidates[0] };
+}
+
+async function waitForInvocationRecord(directory, existing, ownerPid, timeoutMs, dependencies = {}) {
+  const now = dependencies.now || Date.now;
+  const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const read = dependencies.read || resourceRecords;
+  const deadline = now() + timeoutMs;
+  let counts;
+  while (now() < deadline) {
+    let observation;
+    try {
+      observation = observeInvocationRecords(read(directory), existing, ownerPid);
+    } catch {
+      const error = mcpFailure('resource-inventory-failed');
+      mcpFailures.get(error).resources = counts;
+      throw error;
+    }
+    counts = observation.counts;
+    const record = observation.record;
+    if (record) return record;
+    await sleep(100);
+  }
+  const error = mcpFailure('resource-discovery-timeout');
+  mcpFailures.get(error).resources = counts;
+  throw error;
 }
 
 function findProcessForSocket(apiSocketPath) {
@@ -1830,6 +1871,11 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     diagnosticContext = conformanceDiagnostics.prepareForJob(
       toAwfConfig(makeConfig(artifacts, workDir, workspace, {})), 'live',
     );
+    if (diagnosticContext) {
+      failureContext.observeAdmission = () => conformanceDiagnostics.captureAdmissionEvidence(
+        diagnosticContext, require('../../dist/enclave/paths').resolveEnclavePaths(workDir).auditDir,
+      );
+    }
     failureContext.stage = FAILURE_STAGES.GATEWAY;
     const handoff = startGatewayFixture({
       gatewayEnv, gatewayKey, capability, identity: gatewayIdentity,
@@ -2318,6 +2364,8 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
           status: acceptancePassed && !process.exitCode ? 'passed' : 'failed',
           stage: Object.values(FAILURE_STAGES).includes(failureContext.stage) ? failureContext.stage : 'unknown stage',
           check: failureContext.check,
+          checks: failureContext.checks,
+          admissionEvidence: failureContext.admissionEvidence,
           startup: startupSnapshots.map(({ stage, profile, diagnostic, evidence }) =>
             ({ stage, profile, diagnostic, evidence })),
         });
@@ -2434,5 +2482,7 @@ module.exports = {
   parsePublicToolResult,
   assertCanonicalToolError,
   acceptanceCheck,
+  observeInvocationRecords,
+  waitForInvocationRecord,
   requestMcp,
 };

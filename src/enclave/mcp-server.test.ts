@@ -35,6 +35,22 @@ const validArguments = {
 const { rpc, fakeBroker, canonicalErrorBroker } = createRpcTestHarness(CANONICAL_ERROR_RESPONSE_JSON);
 
 describe('AWF enclave MCP protocol', () => {
+  it.each(['busy', 'tool-call-cap'])('records protected %s rejection without changing the public response', async reason => {
+    const lifecycle = jest.fn();
+    const handler = canonicalErrorBroker();
+    const response = await dispatchJsonRpc(rpc('tools/call', { name: TOOL_NAME, arguments: validArguments }), {
+      handlers: { [TOOL_NAME]: handler },
+      diagnosticAudit: { lifecycle },
+      ...(reason === 'busy' ? { tryAcquireToolCall: () => undefined }
+        : { toolCallBudget: { tryConsume: () => false } }),
+    });
+    expect(response.result.structuredContent).toEqual({ status: 'error' });
+    expect(lifecycle).toHaveBeenCalledWith('tool-admission', {
+      status: 'rejected', reason, executorKind: 'script',
+    });
+    expect(JSON.stringify(lifecycle.mock.calls)).not.toContain(validArguments.script);
+  });
+
   it('implements initialization and the initialized notification', async () => {
     const deps = { handlers: { [TOOL_NAME]: canonicalErrorBroker() }, maxScriptBytes: 65536 };
     const initialized = await dispatchJsonRpc(rpc('initialize', {}), deps);

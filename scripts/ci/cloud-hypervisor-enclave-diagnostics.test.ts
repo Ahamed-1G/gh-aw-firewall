@@ -6,6 +6,7 @@ import { captureEnclaveProxyContainerLog, preservePublicEnclaveProxyDiagnostics 
 
 const diagnostics = require('./cloud-hypervisor-enclave-diagnostics');
 const live = require('./cloud-hypervisor-enclave-live-smoke');
+const collector = require('./collect-enclave-smoke-debug.cjs');
 
 describe('public enclave conformance diagnostic retention', () => {
   const uid = process.getuid!();
@@ -73,6 +74,110 @@ describe('public enclave conformance diagnostic retention', () => {
       httpStatus: 200, response: { toolIsError: true, contentMatches: true, structuredStatus: 'error' },
     });
     expect(records()).not.toContain(secret);
+  });
+
+  it('captures admission closure and broker rejections before private fixture cleanup', () => {
+    const context = prepare();
+    invocation();
+    const audit = path.join(temp, 'broker-audit');
+    fs.mkdirSync(audit, { mode: 0o700 });
+    fs.writeFileSync(path.join(audit, 'enclave.jsonl'), JSON.stringify({
+      kind: 'failure', invocationId: secret, reason: 'invocation-count-exhausted', detail: secret,
+    }) + '\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(audit, 'enclave-host-executor.jsonl'), [
+      { kind: 'lifecycle', event: 'host-executor', detail: {
+        phase: 'response', status: 'parsed', reason: 'closed', secret,
+      } },
+      { kind: 'lifecycle', event: 'invocation-timing', detail: {
+        phase: 'admission', status: 'rejected', reason: 'admissions-closed',
+        accepting: false, laneClosed: true, secret,
+      } },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n', { mode: 0o600 });
+    write(path.join(roots.journal, 'diagnostics', `${runId}-${'c'.repeat(32)}.json`), {
+      schemaVersion: 1, runId, component: 'host-executor-control', events: [],
+      admissionClosure: { phase: 'admissions-closed', reason: 'closed', outcome: 'executor-failure',
+        cleanupComplete: 'absent', recoverableFailure: 'absent', invocationId: secret, secret },
+      failure: { phase: 'request-rejected', reason: 'closed', message: secret },
+    });
+    const evidence = diagnostics.captureAdmissionEvidence(context, audit);
+    expect(evidence.broker.status).toBe('captured');
+    expect(evidence.broker.events).toEqual(expect.arrayContaining([
+      { phase: 'response', status: 'parsed', reason: 'closed' },
+      { phase: 'admission', status: 'rejected', reason: 'admissions-closed', accepting: false, laneClosed: true },
+    ]));
+    expect(evidence.hostControl.failures).toEqual(expect.arrayContaining([
+      { phase: 'admissions-closed', reason: 'closed', outcome: 'executor-failure',
+        cleanupComplete: 'absent', recoverableFailure: 'absent' },
+    ]));
+    fs.rmSync(audit, { recursive: true });
+    diagnostics.collect(context, { status: 'failed', admissionEvidence: evidence, checks: [{
+      step: 'guest-cancellation', phase: 'request', status: 'passed', secret,
+      response: { structuredStatus: 'error', secret },
+    }] });
+    expect(records()).toContain('"recoverableFailure":"absent"');
+    expect(records()).toContain('"structuredStatus":"error"');
+    expect(records()).not.toContain(secret);
+  });
+
+  it('bounds admission history and revalidates every field at upload', () => {
+    const context = prepare();
+    diagnostics.collect(context, { status: 'failed', admissionEvidence: {
+      broker: { status: 'captured', secret,
+        events: Array(100).fill({ phase: 'admission', reason: secret, status: 'rejected', secret }),
+        failures: Array(100).fill({ phase: 'failure', reason: 'invalid-request', secret }) },
+      hostControl: { status: secret, events: [{ phase: 'invoke', secret }] },
+    }, checks: Array(100).fill({
+      step: 'guest-cancellation', phase: 'resource-discovery', status: 'failed',
+      resources: { newRecords: 'one', eligible: 'zero', ownerMatches: secret }, secret,
+    }) });
+    const value = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+    expect(value.admissionEvidence.broker.events).toHaveLength(32);
+    expect(value.admissionEvidence.broker.failures).toHaveLength(16);
+    expect(value.admissionEvidence.hostControl).toBeUndefined();
+    expect(value.checks).toHaveLength(16);
+    expect(value.checks[0].resources).toEqual({ newRecords: 'one', eligible: 'zero' });
+    expect(records()).not.toContain(secret);
+  });
+
+  it('reports an unsafe broker audit rather than following a symlink or copying raw text', () => {
+    const context = prepare();
+    const audit = path.join(temp, 'unsafe-audit');
+    fs.mkdirSync(audit, { mode: 0o700 });
+    const privateFile = path.join(temp, 'private-record');
+    fs.writeFileSync(privateFile, secret, { mode: 0o600 });
+    fs.symlinkSync(privateFile, path.join(audit, 'enclave.jsonl'));
+    const evidence = diagnostics.captureAdmissionEvidence(context, audit);
+    expect(evidence.broker).toEqual({ status: 'read-failed' });
+    expect(JSON.stringify(evidence)).not.toContain(secret);
+    expect(diagnostics.captureAdmissionEvidence(undefined, audit)).toEqual({});
+  });
+
+  it('admits only the explicitly named root-owned sticky ancestor for the broker audit', () => {
+    let sticky = true;
+    let baseUid = 0;
+    let symlink = false;
+    let privateWritable = false;
+    const nodeFs: typeof fs = require('node:fs');
+    jest.spyOn(nodeFs, 'lstatSync').mockImplementation(target => Object.assign(fs.statSync(temp), {
+      uid: String(target) === '/var/tmp' ? baseUid : uid,
+      mode: String(target) === '/var/tmp' ? (sticky ? 0o41777 : 0o40777)
+        : (privateWritable && String(target) === '/var/tmp/private' ? 0o40777 : 0o40700),
+      isSymbolicLink: () => symlink && String(target) === '/var/tmp',
+    }));
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/', '/var/tmp')).not.toThrow();
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/')).toThrow();
+    expect(() => collector.directory('/var/tmp', uid, '/', '/var/tmp')).toThrow();
+    sticky = false;
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/', '/var/tmp')).toThrow();
+    sticky = true;
+    baseUid = uid === 0 ? 1 : uid;
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/', '/var/tmp')).toThrow();
+    baseUid = 0;
+    symlink = true;
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/', '/var/tmp')).toThrow();
+    symlink = false;
+    privateWritable = true;
+    expect(() => collector.directory('/var/tmp/private/audit', uid, '/', '/var/tmp')).toThrow();
   });
 
   it('drops arbitrary check fields and rejects unknown step identities', () => {

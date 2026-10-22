@@ -5,7 +5,7 @@ import { performance } from 'perf_hooks';
 import type { HostExecutorInvocationPlan, HostExecutorRunState } from './host-executor-server';
 import {
   HOST_EXECUTOR_ID_PATTERN, HOST_EXECUTOR_ENTRY_ID_PATTERN, HOST_EXECUTOR_REJECTION_STAGES,
-  type HostExecutorError, type HostExecutorRejectionStage,
+  type HostExecutorError, type HostExecutorRejectionStage, type HostExecutorOutcome,
 } from './host-executor-protocol';
 import {
   resolveCleanupDependencies,
@@ -160,7 +160,7 @@ export type HostExecutorControlPhase =
   | 'request-rejected' | 'invoke-plan' | 'invocation-register' | 'backend-start'
   | 'backend-complete' | 'backend-failed' | 'cleanup-pending' | 'settled' | 'shutdown'
   | 'shutdown-failed'
-  | 'deadline-expired' | 'cancellation'
+  | 'deadline-expired' | 'cancellation' | 'admissions-closed'
   | 'plan-run-identity' | 'plan-entry-policy' | 'plan-static-seed' | 'plan-selector-policy' | 'plan-path';
 
 interface HostExecutorControlEvent {
@@ -171,6 +171,9 @@ interface HostExecutorControlEvent {
   sequence: number;
   invocationId?: string;
   rejectionStage?: HostExecutorRejectionStage;
+  outcome?: HostExecutorOutcome;
+  cleanupComplete?: boolean | 'absent';
+  recoverableFailure?: boolean | 'absent';
 }
 
 export class HostExecutorControlDiagnostics {
@@ -186,6 +189,7 @@ export class HostExecutorControlDiagnostics {
     events: HostExecutorControlEvent[];
     failure?: HostExecutorControlEvent;
     cleanupFailure?: HostExecutorControlEvent;
+    admissionClosure?: HostExecutorControlEvent;
   };
 
   constructor(run: HostExecutorRunState) {
@@ -207,6 +211,11 @@ export class HostExecutorControlDiagnostics {
     rejection?: HostExecutorError,
     invocationId?: string,
     rejectionStage?: HostExecutorRejectionStage,
+    outcome?: {
+      outcome: HostExecutorOutcome;
+      cleanupComplete: boolean | 'absent';
+      recoverableFailure: boolean | 'absent';
+    },
   ): void {
     const event = {
       phase, elapsedMs: Math.max(0, Math.round(performance.now() - this.started)),
@@ -215,6 +224,10 @@ export class HostExecutorControlDiagnostics {
         ? { invocationId } : {}),
       ...(rejectionStage !== undefined && HOST_EXECUTOR_REJECTION_STAGES.includes(rejectionStage)
         ? { rejectionStage } : {}),
+      ...(outcome === undefined ? {} : {
+        outcome: outcome.outcome, cleanupComplete: outcome.cleanupComplete,
+        recoverableFailure: outcome.recoverableFailure,
+      }),
       reason: rejection ?? (error === undefined ? 'none' : hostPreflightReason(error)),
       errorType: error instanceof TypeError ? 'TypeError'
         : error instanceof RangeError ? 'RangeError'
@@ -225,9 +238,11 @@ export class HostExecutorControlDiagnostics {
     const firstFailure = !this.snapshot.failure && (error !== undefined || phase === 'cleanup-pending');
     if (firstFailure) this.snapshot.failure = event;
     if (phase === 'shutdown-failed') this.snapshot.cleanupFailure ??= event;
+    if (phase === 'admissions-closed') this.snapshot.admissionClosure ??= event;
     if (this.snapshot.events.length < 128) this.snapshot.events.push(event);
     else this.snapshot.dropped += 1;
-    if (this.snapshot.dropped > 0 && !firstFailure && phase !== 'shutdown' && phase !== 'shutdown-failed') return;
+    if (this.snapshot.dropped > 0 && !firstFailure && phase !== 'shutdown'
+      && phase !== 'shutdown-failed' && phase !== 'admissions-closed') return;
     try {
       persist(this.file, this.snapshot);
     } catch {

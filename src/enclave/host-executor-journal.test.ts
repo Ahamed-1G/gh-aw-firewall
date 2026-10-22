@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  HostExecutorJournal, HostExecutorResourceJournal, reapHostExecutorResources,
+  HostExecutorJournal, HostExecutorControlDiagnostics, HostExecutorResourceJournal, reapHostExecutorResources,
   hostExecutorVmRunId, hostExecutorJournalDirectory,
   HOST_EXECUTOR_STORAGE_ROOT, hostExecutorStorageDirectory,
 } from './host-executor-journal';
@@ -107,6 +107,24 @@ describe('durable host executor journal', () => {
   async function resourceJournal() {
     return HostExecutorResourceJournal.create(run, plan, vmRunId(), dependencies);
   }
+
+  it('retains the first admission closure and recovery markers after the event cap', () => {
+    const diagnostics = new HostExecutorControlDiagnostics(run);
+    for (let index = 0; index < 130; index += 1) diagnostics.record('backend-start');
+    diagnostics.record('admissions-closed', undefined, 'closed', plan.invocationId, undefined, {
+      outcome: 'executor-failure', cleanupComplete: true, recoverableFailure: false,
+    });
+    diagnostics.record('admissions-closed', undefined, 'closed', plan.invocationId, undefined, {
+      outcome: 'executor-failure', cleanupComplete: 'absent', recoverableFailure: 'absent',
+    });
+    const directory = path.join(run.journalDir!, 'diagnostics');
+    const value = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
+    expect(value.events).toHaveLength(128);
+    expect(value.admissionClosure).toMatchObject({
+      phase: 'admissions-closed', cleanupComplete: true, recoverableFailure: false,
+    });
+    expect(value.dropped).toBe(4);
+  });
 
   const reap = () => reapHostExecutorResources(run.journalDir!, registry, tools, dependencies);
   const recordFile = () => path.join(run.journalDir!, `${run.runId}-${plan.invocationId}.resources.json`);

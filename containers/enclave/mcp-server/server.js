@@ -408,6 +408,7 @@ async function main() {
         maxScriptBytes,
         maxPromptBytes,
         toolCallBudget,
+        diagnosticAudit: hostExecutorAudit,
       });
       await listenOnPrivateNetwork(mcpServer, serverConfig);
       return mcpServer;

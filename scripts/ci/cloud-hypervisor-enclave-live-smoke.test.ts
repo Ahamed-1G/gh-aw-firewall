@@ -146,9 +146,18 @@ const harness = require(harnessPath) as {
   parsePublicToolResult(response: unknown, requestId: number): { status: string; result?: unknown };
   assertCanonicalToolError(response: unknown, requestId: number): void;
   acceptanceCheck<T>(
-    context: { check?: Record<string, unknown> }, step: string, phase: string,
+    context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>>;
+      observeAdmission?: () => unknown; admissionEvidence?: unknown }, step: string, phase: string,
     action: () => T | Promise<T>,
   ): Promise<T>;
+  observeInvocationRecords(
+    records: Array<{ file: string; record: Record<string, unknown> }>, existing: Set<string>, ownerPid: number,
+  ): { counts: Record<string, string>; record?: unknown };
+  waitForInvocationRecord(
+    directory: string, existing: Set<string>, ownerPid: number, timeoutMs: number,
+    dependencies: { now: () => number; sleep: (ms: number) => Promise<void>;
+      read: () => Array<{ file: string; record: Record<string, unknown> }> },
+  ): Promise<unknown>;
   requestMcp(
     endpoint: string,
     apiKey: string,
@@ -1549,6 +1558,65 @@ describe('bounded MCP acceptance check diagnostics', () => {
   });
   beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
+
+  it('retains early canonical errors even when a request phase itself passes', async () => {
+    const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>>;
+      observeAdmission?: () => unknown } = {
+      observeAdmission: () => ({ broker: { status: 'captured', events: [
+        { phase: 'admission', status: 'rejected', reason: 'admissions-closed', secret: sentinel },
+      ] } }),
+    };
+    await harness.acceptanceCheck(context, 'guest-cancellation', 'request', () => ({
+      ...canonical(), id: 11,
+    }));
+    expect(context.check).toMatchObject({
+      status: 'passed', response: { structuredStatus: 'error', contentMatches: true },
+    });
+    await harness.acceptanceCheck(context, 'guest-cancellation', 'cleanup', () => undefined);
+    expect(context.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'request', status: 'passed',
+        response: expect.objectContaining({ structuredStatus: 'error' }) }),
+    ]));
+    expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+  });
+
+  it('distinguishes every resource-discovery filter without exposing paths or owner identities', () => {
+    const complete = { state: 'pending', owner: { pid: 123 }, storage: { directory: sentinel },
+      directoryIdentity: { secret: sentinel }, snapshot: { secret: sentinel } };
+    const records = [
+      { file: 'existing', record: complete },
+      { file: 'terminal', record: { ...complete, state: 'cleaned' } },
+      { file: 'wrong-owner', record: { ...complete, owner: { pid: 999 } } },
+      { file: 'missing-storage', record: { ...complete, storage: undefined } },
+      { file: 'missing-identity', record: { ...complete, directoryIdentity: undefined } },
+      { file: 'missing-snapshot', record: { ...complete, snapshot: undefined } },
+    ];
+    const observation = harness.observeInvocationRecords(records, new Set(['existing']), 123);
+    expect(observation).toEqual({ counts: {
+      newRecords: 'many', pending: 'many', ownerMatches: 'many', directoryReady: 'many',
+      identityReady: 'one', snapshotReady: 'zero', eligible: 'zero',
+    }, record: undefined });
+    expect(harness.observeInvocationRecords([{ file: 'new', record: complete }], new Set(), 123).record)
+      .toEqual({ file: 'new', record: complete });
+  });
+
+  it.each(['timeout', 'read-error'])('classifies resource discovery %s without losing request history', async kind => {
+    let now = 0;
+    const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+    const read = () => {
+      if (kind === 'read-error') throw new Error(sentinel);
+      return [];
+    };
+    await expect(harness.acceptanceCheck(context, 'guest-cancellation', 'resource-discovery',
+      () => harness.waitForInvocationRecord('/unused', new Set(), 123, 100, {
+        now: () => now, sleep: async ms => { now += ms; }, read,
+      }))).rejects.toThrow();
+    expect(context.check).toMatchObject({
+      reason: kind === 'timeout' ? 'resource-discovery-timeout' : 'resource-inventory-failed',
+    });
+    if (kind === 'timeout') expect(context.check?.resources).toMatchObject({ newRecords: 'zero', eligible: 'zero' });
+    expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+  });
 
   it.each(['agent-enospc', 'script-enospc', 'guest-oom'])(
     'wires every %s phase and preserves the original failure without logging its message', async step => {

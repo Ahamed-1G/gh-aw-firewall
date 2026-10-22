@@ -18,7 +18,7 @@ const ROOTS = {
   debug: '/var/lib/awf-cloud-hypervisor/debug-artifacts/cloud-hypervisor',
 };
 
-function directory(target, uid, trustedRoot = '/') {
+function directory(target, uid, trustedRoot = '/', stickyAncestor) {
   const root = path.resolve(trustedRoot);
   const resolvedTarget = path.resolve(target);
   const relative = path.relative(root, resolvedTarget);
@@ -34,8 +34,10 @@ function directory(target, uid, trustedRoot = '/') {
   for (const component of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, component);
     const stat = fs.lstatSync(current);
+    const protectedStickyAncestor = current === stickyAncestor && current !== resolvedTarget
+      && stat.uid === 0 && (stat.mode & 0o1000) !== 0;
     if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== uid && stat.uid !== 0) ||
-        (stat.mode & 0o022) !== 0) {
+        ((stat.mode & 0o022) !== 0 && !protectedStickyAncestor)) {
       throw new Error('Unsafe debug collection directory');
     }
   }
