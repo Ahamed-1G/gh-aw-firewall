@@ -350,6 +350,7 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
     let stopPromise: Promise<void> | undefined;
     let managerStopped = false;
     let outcome: HostExecutorBackendResult = { outcome: 'executor-failure' };
+    let guestWorkloadFailed = false;
     let cleanupError: unknown;
     const pendingWork = new Set<Promise<unknown>>();
     let filesystemCleanupPromise: Promise<void> | undefined;
@@ -587,6 +588,7 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
         diagnostic.fail(report, 'guest-execute', markHostPreflightError(
           new Error('Host executor guest command failed'), 'command-failed'));
         outcome = { outcome: 'executor-failure' };
+        guestWorkloadFailed = true;
       } else {
         // Result reads require the VM to have stopped, but cleanup failures
         // must remain distinct from the invocation's original failure.
@@ -724,6 +726,9 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
     if (cleanupError !== undefined || diagnostic.persistenceFailed) {
       this.closed = true;
       return { outcome: 'executor-failure', cleanupComplete: false };
+    }
+    if (guestWorkloadFailed && outcome.outcome === 'executor-failure') {
+      return { outcome: 'executor-failure', cleanupComplete: true, recoverableFailure: true };
     }
     return outcome;
   }

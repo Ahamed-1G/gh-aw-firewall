@@ -120,7 +120,12 @@ export interface HostExecutorBackendResult {
   outcome: HostExecutorOutcome;
   /** False retains a nonterminal recovery tombstone; no result is released. */
   cleanupComplete?: boolean;
-  /** Ordinary workload failure; only effective with explicit cleanupComplete: true. Never on the wire. */
+  /**
+   * Only a completed guest workload's nonzero exit/signal, with verified resource
+   * cleanup and durable diagnostics, may preserve admissions. Never set for
+   * startup, transport or infrastructure failures; requires cleanupComplete: true.
+   * Host-only classification: the public result remains the canonical error.
+   */
   recoverableFailure?: true;
   /** Bounded, schema-valid result. Only carried for `success`. */
   result?: string;

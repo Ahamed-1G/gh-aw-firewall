@@ -8,6 +8,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { isDeepStrictEqual } = require('util');
 const conformanceDiagnostics = require('./cloud-hypervisor-enclave-diagnostics');
+const diagnosticCollector = require('./collect-enclave-smoke-debug.cjs');
 
 const RELEASE_ASSETS = [
   'cloud-hypervisor-test-x86_64.tar.gz',
@@ -1395,6 +1396,42 @@ async function waitForInvocationRecord(directory, existing, ownerPid, timeoutMs,
   throw error;
 }
 
+async function waitForInvocationOutcome(directory, identity, expected, timeoutMs = 15_000, dependencies = {}) {
+  if (!/^[a-f0-9]{32}$/.test(identity.runId || '')
+      || !/^[a-f0-9]{16,64}$/.test(identity.invocationId || '')
+      || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(identity.entryId || '')
+      || !['timeout', 'cancelled'].includes(expected)) {
+    throw mcpFailure('invocation-evidence-invalid');
+  }
+  const now = dependencies.now || Date.now;
+  const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const read = dependencies.read || (() => {
+    diagnosticCollector.directory(directory, process.getuid());
+    return diagnosticCollector.readRegular(
+      path.join(directory, `${identity.runId}.journal`), 1024 * 1024, process.getuid(),
+    ).toString('utf8');
+  });
+  const deadline = now() + timeoutMs;
+  const expectedDigest = require('../../dist/enclave/host-executor-protocol').hostExecutorResultDigest(expected);
+  while (now() < deadline) {
+    let records;
+    try {
+      records = read().trim().split('\n').map(line => JSON.parse(line));
+      if (records[0]?.runId !== identity.runId) throw new Error('Invalid run identity');
+    } catch {
+      throw mcpFailure('invocation-evidence-invalid');
+    }
+    const terminal = records.filter(record => record.entryId === identity.entryId
+      && record.invocationId === identity.invocationId && ['terminal', 'settled'].includes(record.state));
+    if (terminal.some(record => (record.state === 'terminal' && record.outcome !== expected)
+        || record.resultDigest !== expectedDigest)) throw mcpFailure('invocation-outcome-mismatch');
+    if (terminal.some(record => record.state === 'terminal')
+        && terminal.some(record => record.state === 'settled')) return;
+    await sleep(100);
+  }
+  throw mcpFailure('invocation-evidence-timeout');
+}
+
 function findProcessForSocket(apiSocketPath) {
   for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
@@ -2079,21 +2116,33 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     await acceptanceCheck(failureContext, 'guest-failure', 'cleanup',
       () => waitForVmCleanup(15_000, primaryVmResidue));
 
-    const timeout = await acceptanceCheck(failureContext, 'guest-timeout', 'request',
-      () => requestMcp(endpoint, gatewayKey, 10, 'tools/call', {
-        name: 'enclave_run_script',
-        arguments: {
-          privateRepo: 'github/gh-aw-firewall',
-          schema: errorSchema,
-          script: 'import time; time.sleep(150)',
-        },
-      }));
+    const journalRoot = '/var/lib/awf-cloud-hypervisor/host-executor-journal';
+    const existingTimeoutResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
+    const [timeout, timeoutActive] = await Promise.all([
+      acceptanceCheck(failureContext, 'guest-timeout', 'request',
+        () => requestMcp(endpoint, gatewayKey, 10, 'tools/call', {
+          name: 'enclave_run_script',
+          arguments: {
+            privateRepo: 'github/gh-aw-firewall',
+            schema: errorSchema,
+            script: 'import time\nopen("/output/timeout-probe-started", "w").write("started")\ntime.sleep(150)',
+          },
+        })),
+      (async () => {
+        const active = await acceptanceCheck(failureContext, 'guest-timeout', 'resource-discovery',
+          () => waitForInvocationRecord(journalRoot, existingTimeoutResources, awf.pid, 90_000));
+        await acceptanceCheck(failureContext, 'guest-timeout', 'marker-wait',
+          () => waitForPath(path.join(active.record.directory, 'output', 'timeout-probe-started'), 90_000));
+        return active;
+      })(),
+    ]);
     await acceptanceCheck(failureContext, 'guest-timeout', 'result-validation',
       () => assertCanonicalToolError(timeout, 10));
     await acceptanceCheck(failureContext, 'guest-timeout', 'cleanup',
       () => waitForVmCleanup(15_000, primaryVmResidue));
+    await acceptanceCheck(failureContext, 'guest-timeout', 'execution-validation',
+      () => waitForInvocationOutcome(journalRoot, timeoutActive.record, 'timeout'));
 
-    const journalRoot = '/var/lib/awf-cloud-hypervisor/host-executor-journal';
     const existingCancellationResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
     const cancellationMarker = [
       'import time',
@@ -2110,17 +2159,24 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
           script: cancellationMarker,
         },
       }, cancellationController.signal));
-    const cancellationActive = await acceptanceCheck(failureContext, 'guest-cancellation', 'resource-discovery',
-      () => waitForInvocationRecord(journalRoot, existingCancellationResources, awf.pid, 90_000));
-    await acceptanceCheck(failureContext, 'guest-cancellation', 'marker-wait',
-      () => waitForPath(path.join(cancellationActive.record.directory, 'output', 'cancel-probe-started'), 90_000));
-    cancellationController.abort();
-    const cancelled = await cancellationRequest;
+    const [cancelled, cancellationActive] = await Promise.all([
+      cancellationRequest,
+      (async () => {
+        const active = await acceptanceCheck(failureContext, 'guest-cancellation', 'resource-discovery',
+          () => waitForInvocationRecord(journalRoot, existingCancellationResources, awf.pid, 90_000));
+        await acceptanceCheck(failureContext, 'guest-cancellation', 'marker-wait',
+          () => waitForPath(path.join(active.record.directory, 'output', 'cancel-probe-started'), 90_000));
+        cancellationController.abort();
+        return active;
+      })(),
+    ]);
     await acceptanceCheck(failureContext, 'guest-cancellation', 'disconnect-validation', () => {
       if (cancelled !== undefined) throw mcpFailure('disconnect-not-cancelled');
     });
     await acceptanceCheck(failureContext, 'guest-cancellation', 'cleanup',
       () => waitForVmCleanup(15_000, primaryVmResidue));
+    await acceptanceCheck(failureContext, 'guest-cancellation', 'execution-validation',
+      () => waitForInvocationOutcome(journalRoot, cancellationActive.record, 'cancelled'));
 
     failureContext.stage = FAILURE_STAGES.STARTUP_FAULTS;
     try {
@@ -2484,5 +2540,6 @@ module.exports = {
   acceptanceCheck,
   observeInvocationRecords,
   waitForInvocationRecord,
+  waitForInvocationOutcome,
   requestMcp,
 };

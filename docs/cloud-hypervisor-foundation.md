@@ -1504,10 +1504,27 @@ aggregate `ENOSPC` within a write bound no larger than their configured role
 ceiling; the probe removes its files before returning a canonical result. A
 guest memory-pressure probe requires an increased guest `oom_kill` counter and
 the memory-consuming child to exit by `SIGKILL`. The harness also requires
-canonical guest-failure and timeout responses, aborts a public request only
-after its guest has reached a marker, waits for resource cleanup, and kills an
+canonical guest-failure and timeout responses. Timeout and cancellation must
+each create a new owner-matched resource record and reach a guest-written
+marker; after cleanup, both terminal and settled host-journal records must
+confirm the specific `timeout` or `cancelled` outcome. A canonical error alone
+is insufficient. The harness aborts a public request only
+after its guest has reached the marker, waits for resource cleanup, and kills an
 identified VMM plus the AWF host process to verify that restart cleans the
 exact pending journal identity without replaying a successful result.
+
+The trusted host-backend result contract distinguishes ordinary workload
+failure from infrastructure failure. A completed guest nonzero exit or signal
+may return `executor-failure` with host-only `recoverableFailure: true` and
+`cleanupComplete: true` **only after** VM stop, durable cleanup-record completion,
+snapshot/export/storage removal, resource-journal completion, and diagnostic
+persistence have succeeded. This matches the Docker backend's existing recovery
+contract and permits the next charged invocation without changing the caller's
+canonical error. Startup, transport, artifact-integrity and other infrastructure
+failures do not receive recovery markers. Cleanup or diagnostic-persistence
+failure returns `cleanupComplete: false`, retains recovery state where needed,
+and keeps admissions closed. Neither the broker nor the primary agent can set
+these trusted host-only classifications.
 
 `scripts/ci/cloud-hypervisor-enclave-startup-faults.js` adds a host-only partial
 startup probe without changing production APIs or introducing CLI/config/env

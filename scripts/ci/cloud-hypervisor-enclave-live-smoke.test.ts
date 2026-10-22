@@ -5,6 +5,7 @@ import * as path from 'path';
 import { execFileSync, spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { validateSchema, validateValueAgainstSchema } from '../../src/bounded-execution/finite-schema';
+import { hostExecutorResultDigest } from '../../src/enclave/host-executor-protocol';
 import type { EnclaveStartupProgress } from '../../src/enclave/startup-progress';
 import {
   HostPreflightReporter, type HostPreflightCheck, type HostPreflightScope,
@@ -158,6 +159,11 @@ const harness = require(harnessPath) as {
     dependencies: { now: () => number; sleep: (ms: number) => Promise<void>;
       read: () => Array<{ file: string; record: Record<string, unknown> }> },
   ): Promise<unknown>;
+  waitForInvocationOutcome(
+    directory: string, identity: { runId: string; entryId: string; invocationId: string },
+    expected: string, timeoutMs: number,
+    dependencies: { now: () => number; sleep: (ms: number) => Promise<void>; read: () => string },
+  ): Promise<void>;
   requestMcp(
     endpoint: string,
     apiKey: string,
@@ -1347,6 +1353,9 @@ print(json.dumps({"milestones": milestones, "output": value, "failure": failure,
     expect(source).toContain("recoveryTools = await requestMcp");
     expect(source).toContain("open(\"/output/cancel-probe-started\"");
     expect(source).toContain("cancellationController.abort()");
+    expect(source).toContain('open("/output/timeout-probe-started"');
+    expect(source).toContain("waitForInvocationOutcome(journalRoot, timeoutActive.record, 'timeout')");
+    expect(source).toContain("waitForInvocationOutcome(journalRoot, cancellationActive.record, 'cancelled')");
   });
 
   it('preserves first-run diagnostics and isolates recovery state', () => {
@@ -1558,6 +1567,60 @@ describe('bounded MCP acceptance check diagnostics', () => {
   });
   beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
+
+  it.each(['timeout', 'cancelled'] as const)('requires both durable terminal and settled %s evidence', async outcome => {
+    const identity = { runId: 'a'.repeat(32), entryId: 'script', invocationId: 'b'.repeat(32) };
+    let now = 0;
+    let reads = 0;
+    await harness.waitForInvocationOutcome('/unused', identity, outcome, 1000, {
+      now: () => now,
+      sleep: async ms => { now += ms; },
+      read: () => {
+        reads += 1;
+        return [
+          { runId: identity.runId, state: 'open' },
+          { ...identity, state: 'terminal', outcome, resultDigest: hostExecutorResultDigest(outcome, undefined) },
+          ...(reads > 1 ? [{ ...identity, state: 'settled',
+            resultDigest: hostExecutorResultDigest(outcome, undefined) }] : []),
+        ].map(value => JSON.stringify(value)).join('\n');
+      },
+    });
+    expect(reads).toBe(2);
+  });
+
+  it.each([
+    ['missing-terminal', 'invocation-evidence-timeout'],
+    ['other-invocation', 'invocation-evidence-timeout'],
+    ['wrong-outcome', 'invocation-outcome-mismatch'],
+    ['wrong-digest', 'invocation-outcome-mismatch'],
+    ['other-run', 'invocation-evidence-invalid'],
+    ['malformed', 'invocation-evidence-invalid'],
+    ['read-failed', 'invocation-evidence-invalid'],
+  ])('rejects %s evidence instead of accepting an arbitrary canonical error', async (kind, reason) => {
+    const identity = { runId: 'a'.repeat(32), entryId: 'script', invocationId: 'b'.repeat(32) };
+    let now = 0;
+    const context: { check?: Record<string, unknown> } = {};
+    await expect(harness.acceptanceCheck(context, 'guest-timeout', 'execution-validation',
+      () => harness.waitForInvocationOutcome('/unused', identity, 'timeout', 100, {
+        now: () => now,
+        sleep: async ms => { now += ms; },
+        read: () => {
+          if (kind === 'read-failed') throw new Error(sentinel);
+          if (kind === 'malformed') return sentinel;
+          return [
+            { runId: kind === 'other-run' ? 'c'.repeat(32) : identity.runId, state: 'open' },
+            ...(kind === 'missing-terminal' ? [] : ['terminal', 'settled'].map(state => ({
+              ...identity, state,
+              invocationId: kind === 'other-invocation' ? 'c'.repeat(32) : identity.invocationId,
+              ...(state === 'terminal' ? { outcome: kind === 'wrong-outcome' ? 'executor-failure' : 'timeout' } : {}),
+              resultDigest: kind === 'wrong-digest' ? '0'.repeat(64) : hostExecutorResultDigest('timeout', undefined),
+            }))),
+          ].map(value => JSON.stringify(value)).join('\n');
+        },
+      }))).rejects.toThrow();
+    expect(context.check).toMatchObject({ phase: 'execution-validation', status: 'failed', reason });
+    expect(JSON.stringify(jest.mocked(console.log).mock.calls)).not.toContain(sentinel);
+  });
 
   it('retains early canonical errors even when a request phase itself passes', async () => {
     const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>>;
