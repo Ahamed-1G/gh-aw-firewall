@@ -1513,6 +1513,21 @@ after its guest has reached the marker, waits for resource cleanup, and kills an
 identified VMM plus the AWF host process to verify that restart cleans the
 exact pending journal identity without replaying a successful result.
 
+Resource discovery reports raw-entry, regular-file, resource-suffix and valid-name
+count buckets before applying the new-record, owner and readiness filters.
+Missing or unreadable directories are explicit inventory failures, never empty
+inventories. The observer uses the production journal-directory constant and
+the protocol's full 16–64-character identity range. A real journal writer/reader
+regression covers publication through discovery rather than only mocked records.
+The producer retains protected publication evidence after durable resource-record
+creation. Discovery compares its directory identity and mount namespace with the
+observer and the live host process; public diagnostics expose only finite
+same/different/unavailable classifications, count buckets, publication flags and
+failed-operation codes. Paths, filenames, PIDs, inode/device numbers and namespace
+identities remain private. Record open, stat, validation, read, close, parse and
+identity failures are distinguished. These probes do not change recovery policy,
+timeouts, sandboxing or mount permissions.
+
 The trusted host-backend result contract distinguishes ordinary workload
 failure from infrastructure failure. A completed guest nonzero exit or signal
 may return `executor-failure` with host-only `recoverableFailure: true` and

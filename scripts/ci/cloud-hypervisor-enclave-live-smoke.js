@@ -9,6 +9,8 @@ const { spawn, spawnSync } = require('child_process');
 const { isDeepStrictEqual } = require('util');
 const conformanceDiagnostics = require('./cloud-hypervisor-enclave-diagnostics');
 const diagnosticCollector = require('./collect-enclave-smoke-debug.cjs');
+const { HOST_EXECUTOR_ID_PATTERN } = require('../../dist/enclave/host-executor-protocol');
+const { HOST_EXECUTOR_DEFAULT_JOURNAL_DIRECTORY } = require('../../dist/enclave/host-executor-journal');
 
 const RELEASE_ASSETS = [
   'cloud-hypervisor-test-x86_64.tar.gz',
@@ -93,7 +95,8 @@ async function acceptanceCheck(context, step, phase, action) {
     const result = await action();
     const requestId = { 'agent-enospc': 6, 'script-enospc': 7, 'guest-oom': 8,
       'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11 }[step];
-    record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId) : {});
+    record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId)
+      : phase === 'resource-discovery' ? { inventory: result?.inventory } : {});
     return result;
   } catch (error) {
     record('failed', mcpFailures.get(error) || { reason: 'operation-failed' });
@@ -1341,15 +1344,117 @@ function buildOomProbeScript() {
   ].join('\n');
 }
 
-function resourceRecords(directory) {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.isSymbolicLink()
-      && /^[0-9a-f]{32}-[0-9a-f]{32}\.resources\.json$/.test(entry.name))
-    .map((entry) => {
+function countBucket(count) {
+  return count === 0 ? 'zero' : count === 1 ? 'one' : 'many';
+}
+
+function resourceRecords(directory, inventory = {}) {
+  inventory.operation = 'directory-lstat';
+  inventory.location = directory === HOST_EXECUTOR_DEFAULT_JOURNAL_DIRECTORY ? 'default' : 'custom';
+  try {
+    const stat = fs.lstatSync(directory);
+    inventory.directory = stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'ready' : 'not-directory';
+    inventory.operation = 'directory-trust';
+    diagnosticCollector.directory(directory, process.getuid());
+    inventory.operation = 'directory-readdir';
+    const entries = fs.readdirSync(directory, { withFileTypes: true });
+    inventory.entries = countBucket(entries.length);
+    if (entries.length > 4096) throw new Error('Resource inventory exceeds bound');
+    const regular = entries.filter(entry => entry.isFile() && !entry.isSymbolicLink());
+    inventory.regularFiles = countBucket(regular.length);
+    const suffixed = regular.filter(entry => entry.name.endsWith('.resources.json'));
+    inventory.resourceSuffix = countBucket(suffixed.length);
+    const named = suffixed.filter(entry =>
+      entry.name.slice(0, -'.resources.json'.length).split('-').length === 2
+      && entry.name.slice(0, -'.resources.json'.length).split('-').every(id => HOST_EXECUTOR_ID_PATTERN.test(id)));
+    inventory.nameMatches = countBucket(named.length);
+    inventory.rejectedNames = countBucket(suffixed.length - named.length);
+    return named.map(entry => {
       const file = path.join(directory, entry.name);
-      return { file, record: JSON.parse(fs.readFileSync(file, 'utf8')) };
+      inventory.operation = 'record-read';
+      const bytes = diagnosticCollector.readRegular(file, 128 * 1024, process.getuid(),
+        operation => { inventory.operation = `record-${operation}`; });
+      inventory.operation = 'record-parse';
+      const record = JSON.parse(bytes);
+      inventory.operation = 'record-identity';
+      if (!record || !['pending', 'cleaned'].includes(record.state)
+          || !HOST_EXECUTOR_ID_PATTERN.test(record.runId || '')
+          || !HOST_EXECUTOR_ID_PATTERN.test(record.invocationId || '')
+          || entry.name !== `${record.runId}-${record.invocationId}.resources.json`) {
+        throw new Error('Resource record identity differs from filename');
+      }
+      inventory.operation = 'complete';
+      return { file, record };
     });
+  } catch (cause) {
+    inventory.code = ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'ELOOP'].includes(cause.code)
+      ? cause.code : 'unknown';
+    if (inventory.operation === 'directory-lstat') {
+      inventory.directory = cause.code === 'ENOENT' ? 'missing' : 'unavailable';
+    }
+    const error = mcpFailure('resource-inventory-failed');
+    mcpFailures.get(error).inventory = inventory;
+    throw error;
+  }
+}
+
+function resourceDiscoveryEvidence(directory, ownerPid, inventory) {
+  const result = { ...inventory };
+  let ownNamespace;
+  result.namespaceOperation = 'observer-readlink';
+  try {
+    ownNamespace = fs.readlinkSync('/proc/self/ns/mnt');
+    result.namespaceOperation = 'host-readlink';
+    result.mountNamespace = ownNamespace === fs.readlinkSync(`/proc/${ownerPid}/ns/mnt`)
+      ? 'same' : 'different';
+    result.namespaceOperation = 'complete';
+  } catch (error) {
+    result.mountNamespace = 'unavailable';
+    result.namespaceCode = ['ENOENT', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'unknown';
+  }
+  result.producer = 'missing';
+  result.producerOperation = 'directory-trust';
+  try {
+    const diagnostics = path.join(directory, 'diagnostics');
+    diagnosticCollector.directory(diagnostics, process.getuid());
+    result.producerOperation = 'directory-readdir';
+    const names = fs.readdirSync(diagnostics);
+    if (names.length > 4096) throw new Error('Producer inventory exceeds bound');
+    const files = names.filter(name => /^[a-f0-9]{16,64}-[a-f0-9]{32}\.json$/.test(name));
+    if (files.length > 128) throw new Error('Producer diagnostics exceed bound');
+    result.producerOperation = 'directory-lstat';
+    const ownDirectory = fs.lstatSync(directory);
+    let matches = 0;
+    for (const name of files) {
+      result.producerOperation = 'record-read';
+      const bytes = diagnosticCollector.readRegular(
+        path.join(diagnostics, name), 320 * 1024, process.getuid(),
+        operation => { result.producerOperation = `record-${operation}`; },
+      );
+      result.producerOperation = 'record-parse';
+      const value = JSON.parse(bytes);
+      const evidence = value.resourcePublication;
+      if (!evidence || evidence.ownerPid !== ownerPid) continue;
+      matches += 1;
+      result.producer = evidence.status;
+      result.producerLocation = evidence.location;
+      result.producerRecordSafe = evidence.recordSafe;
+      result.producerDirectory = !evidence.directoryIdentity ? 'unavailable'
+        : evidence.directoryIdentity.device === ownDirectory.dev && evidence.directoryIdentity.inode === ownDirectory.ino
+          ? 'same' : 'different';
+      result.producerNamespace = !ownNamespace || !evidence.mountNamespace ? 'unavailable'
+        : ownNamespace === evidence.mountNamespace ? 'same' : 'different';
+      const active = !value.milestones?.some(event => event.phase === 'cleanup-start');
+      result.producerActive = active;
+      if (active) break;
+    }
+    result.producerMatches = countBucket(matches);
+    result.producerOperation = 'complete';
+  } catch (error) {
+    result.producer = 'read-failed';
+    result.producerCode = ['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR'].includes(error.code) ? error.code : 'unknown';
+  }
+  return result;
 }
 
 function observeInvocationRecords(records, existing, ownerPid) {
@@ -1377,28 +1482,33 @@ async function waitForInvocationRecord(directory, existing, ownerPid, timeoutMs,
   const read = dependencies.read || resourceRecords;
   const deadline = now() + timeoutMs;
   let counts;
+  let lastInventory;
   while (now() < deadline) {
     let observation;
+    const inventory = {};
     try {
-      observation = observeInvocationRecords(read(directory), existing, ownerPid);
-    } catch {
-      const error = mcpFailure('resource-inventory-failed');
-      mcpFailures.get(error).resources = counts;
+      observation = observeInvocationRecords(read(directory, inventory), existing, ownerPid);
+    } catch (cause) {
+      const error = mcpFailures.has(cause) ? cause : mcpFailure('resource-inventory-failed');
+      Object.assign(mcpFailures.get(error), { resources: counts,
+        inventory: resourceDiscoveryEvidence(directory, ownerPid, mcpFailures.get(error).inventory || inventory) });
       throw error;
     }
     counts = observation.counts;
     const record = observation.record;
-    if (record) return record;
+    if (record) return { ...record, inventory: resourceDiscoveryEvidence(directory, ownerPid, inventory) };
+    lastInventory = inventory;
     await sleep(100);
   }
   const error = mcpFailure('resource-discovery-timeout');
   mcpFailures.get(error).resources = counts;
+  mcpFailures.get(error).inventory = resourceDiscoveryEvidence(directory, ownerPid, lastInventory);
   throw error;
 }
 
 async function waitForInvocationOutcome(directory, identity, expected, timeoutMs = 15_000, dependencies = {}) {
-  if (!/^[a-f0-9]{32}$/.test(identity.runId || '')
-      || !/^[a-f0-9]{16,64}$/.test(identity.invocationId || '')
+  if (!HOST_EXECUTOR_ID_PATTERN.test(identity.runId || '')
+      || !HOST_EXECUTOR_ID_PATTERN.test(identity.invocationId || '')
       || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(identity.entryId || '')
       || !['timeout', 'cancelled'].includes(expected)) {
     throw mcpFailure('invocation-evidence-invalid');
@@ -2116,8 +2226,9 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     await acceptanceCheck(failureContext, 'guest-failure', 'cleanup',
       () => waitForVmCleanup(15_000, primaryVmResidue));
 
-    const journalRoot = '/var/lib/awf-cloud-hypervisor/host-executor-journal';
-    const existingTimeoutResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
+    const journalRoot = HOST_EXECUTOR_DEFAULT_JOURNAL_DIRECTORY;
+    const existingTimeoutResources = await acceptanceCheck(failureContext, 'guest-timeout', 'resource-baseline',
+      () => new Set(resourceRecords(journalRoot).map(({ file }) => file)));
     const [timeout, timeoutActive] = await Promise.all([
       acceptanceCheck(failureContext, 'guest-timeout', 'request',
         () => requestMcp(endpoint, gatewayKey, 10, 'tools/call', {
@@ -2143,7 +2254,8 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     await acceptanceCheck(failureContext, 'guest-timeout', 'execution-validation',
       () => waitForInvocationOutcome(journalRoot, timeoutActive.record, 'timeout'));
 
-    const existingCancellationResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
+    const existingCancellationResources = await acceptanceCheck(failureContext, 'guest-cancellation', 'resource-baseline',
+      () => new Set(resourceRecords(journalRoot).map(({ file }) => file)));
     const cancellationMarker = [
       'import time',
       'open("/output/cancel-probe-started", "w", encoding="ascii").write("started")',
@@ -2539,6 +2651,8 @@ module.exports = {
   assertCanonicalToolError,
   acceptanceCheck,
   observeInvocationRecords,
+  resourceRecords,
+  resourceDiscoveryEvidence,
   waitForInvocationRecord,
   waitForInvocationOutcome,
   requestMcp,

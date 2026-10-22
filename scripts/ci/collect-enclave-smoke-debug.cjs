@@ -55,11 +55,15 @@ function inventory(target, uid, trustedRoot) {
   return names;
 }
 
-function readRegular(target, limit, uid) {
+function readRegular(target, limit, uid, observe) {
+  observe?.('open');
   const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW |
     fs.constants.O_NONBLOCK);
+  let failed = false;
   try {
+    observe?.('fstat');
     const stat = fs.fstatSync(fd);
+    observe?.('validate');
     if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid ||
         (stat.mode & 0o077) !== 0 || stat.size > limit) {
       throw new Error('Unsafe or oversized debug collection file');
@@ -67,14 +71,24 @@ function readRegular(target, limit, uid) {
     const bytes = Buffer.alloc(limit + 1);
     let size = 0;
     while (size <= limit) {
+      observe?.('read');
       const count = fs.readSync(fd, bytes, size, bytes.length - size, null);
       if (!count) break;
       size += count;
     }
     if (size > limit) throw new Error('Debug collection file grew beyond bound');
     return bytes.subarray(0, size);
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    fs.closeSync(fd);
+    try {
+      if (!failed) observe?.('close');
+      fs.closeSync(fd);
+    } catch (error) {
+      observe?.('close');
+      throw error;
+    }
   }
 }
 

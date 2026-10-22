@@ -21,7 +21,7 @@ const MAX_RECORDS = 128;
 
 const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation',
   'agent-enospc', 'script-enospc', 'guest-oom'];
-const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-discovery',
+const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-baseline', 'resource-discovery',
   'marker-wait', 'disconnect-validation', 'execution-validation'];
 const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version', 'request-id',
   'jsonrpc-error', 'result-missing', 'tool-is-error', 'structured-content', 'structured-fields',
@@ -34,6 +34,55 @@ const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'res
   'toolIsError', 'structuredPresent', 'contentMatches'];
 const RESOURCE_FLAGS = ['newRecords', 'pending', 'ownerMatches', 'directoryReady',
   'identityReady', 'snapshotReady', 'eligible'];
+const RESOURCE_OPERATIONS = ['directory-lstat', 'directory-trust', 'directory-readdir',
+  'record-open', 'record-fstat', 'record-validate', 'record-read', 'record-close',
+  'record-parse', 'record-identity', 'record-lstat', 'complete'];
+const RESOURCE_CODES = ['none', 'ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'ELOOP', 'unknown'];
+
+function projectResourceInventory(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const result = {};
+  for (const key of ['entries', 'regularFiles', 'resourceSuffix', 'nameMatches', 'rejectedNames', 'producerMatches']) {
+    if (['zero', 'one', 'many'].includes(value[key])) result[key] = value[key];
+  }
+  for (const key of ['operation', 'producerOperation']) {
+    if (RESOURCE_OPERATIONS.includes(value[key])) result[key] = value[key];
+  }
+  for (const key of ['code', 'producerCode', 'namespaceCode']) {
+    if (RESOURCE_CODES.includes(value[key])) result[key] = value[key];
+  }
+  for (const key of ['location', 'producerLocation']) {
+    if (['default', 'custom'].includes(value[key])) result[key] = value[key];
+  }
+  for (const key of ['mountNamespace', 'producerDirectory', 'producerNamespace']) {
+    if (['same', 'different', 'unavailable'].includes(value[key])) result[key] = value[key];
+  }
+  if (['observer-readlink', 'host-readlink', 'complete'].includes(value.namespaceOperation)) {
+    result.namespaceOperation = value.namespaceOperation;
+  }
+  if (['ready', 'missing', 'not-directory', 'symlink', 'unavailable'].includes(value.directory)) {
+    result.directory = value.directory;
+  }
+  if (['missing', 'published', 'failed', 'read-failed'].includes(value.producer)) result.producer = value.producer;
+  for (const key of ['producerActive', 'producerRecordSafe']) {
+    if (typeof value[key] === 'boolean') result[key] = value[key];
+  }
+  return result;
+}
+
+function projectResourcePublication(value) {
+  if (!value || !['published', 'failed'].includes(value.status)) return undefined;
+  const result = { status: value.status };
+  if (RESOURCE_OPERATIONS.includes(value.operation)) result.operation = value.operation;
+  if (RESOURCE_CODES.includes(value.code)) result.code = value.code;
+  if (['default', 'custom'].includes(value.location)) result.location = value.location;
+  if (['captured', 'unavailable'].includes(value.namespaceStatus)) result.namespaceStatus = value.namespaceStatus;
+  if (typeof value.recordSafe === 'boolean') result.recordSafe = value.recordSafe;
+  for (const key of ['runIdLength', 'invocationIdLength']) {
+    if (Number.isInteger(value[key]) && value[key] >= 16 && value[key] <= 64) result[key] = value[key];
+  }
+  return result;
+}
 const ADMISSION_PHASES = ['admission', 'socket', 'exchange', 'response', 'availability',
   'reconcile', 'invoke', 'status', 'cancel', 'cancel-confirmation', 'terminal', 'digest', 'schema',
   'settle', 'work-start', 'runner-start', 'work-complete', 'cleanup-start', 'cleanup-complete',
@@ -148,6 +197,8 @@ function projectAcceptanceCheck(value) {
       if (['zero', 'one', 'many'].includes(value.resources[key])) result.resources[key] = value.resources[key];
     }
   }
+  const inventory = projectResourceInventory(value.inventory);
+  if (inventory) result.inventory = inventory;
   if (Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599) {
     result.httpStatus = value.httpStatus;
   }
@@ -273,6 +324,8 @@ function projectInvocation(value) {
     : undefined;
   return { schemaVersion: 1, executorKind: value.executorKind,
     sequence: value.sequence, elapsedMs: value.elapsedMs, checks, milestones,
+    ...(projectResourcePublication(value.resourcePublication)
+      ? { resourcePublication: projectResourcePublication(value.resourcePublication) } : {}),
     ...(Array.isArray(value.guestFileOperations) ? {
       guestFileOperations: projectEnclaveSessionDiagnostics(Buffer.from(
         value.guestFileOperations.slice(-16).map(event => JSON.stringify(event) + '\n').join(''),

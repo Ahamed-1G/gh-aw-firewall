@@ -76,6 +76,42 @@ describe('public enclave conformance diagnostic retention', () => {
     expect(records()).not.toContain(secret);
   });
 
+  it('retains only finite publication and discovery facts across upload reprojection', () => {
+    const context = prepare();
+    const file = invocation('script');
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.resourcePublication = {
+      status: 'published', location: 'default', operation: 'record-lstat', code: 'none',
+      namespaceStatus: 'captured', recordSafe: true, runIdLength: 32, invocationIdLength: 24,
+      ownerPid: 12345, directoryIdentity: { device: 23456, inode: 34567 }, mountNamespace: secret,
+      path: secret, payload: secret,
+    };
+    write(file, value);
+    diagnostics.collect(context, { status: 'failed', check: {
+      step: 'guest-timeout', phase: 'resource-discovery', status: 'failed', reason: 'resource-discovery-timeout',
+      inventory: {
+        operation: 'complete', entries: 'many', nameMatches: 'zero', rejectedNames: 'one',
+        producer: 'published', producerDirectory: 'different', producerNamespace: 'same',
+        mountNamespace: 'same', producerActive: true, producerRecordSafe: true,
+        ownerPid: 12345, directoryIdentity: secret, filenames: [secret], error: secret,
+      },
+    } });
+    const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+    expect(summary.check.inventory).toEqual({
+      operation: 'complete', entries: 'many', nameMatches: 'zero', rejectedNames: 'one',
+      producer: 'published', producerDirectory: 'different', producerNamespace: 'same',
+      mountNamespace: 'same', producerActive: true, producerRecordSafe: true,
+    });
+    const projected = JSON.parse(fs.readFileSync(path.join(output, 'upload/invocation-1.json'), 'utf8'));
+    expect(projected.resourcePublication).toEqual({
+      status: 'published', location: 'default', operation: 'record-lstat', code: 'none',
+      namespaceStatus: 'captured', recordSafe: true, runIdLength: 32, invocationIdLength: 24,
+    });
+    expect(diagnostics.projectInvocation(projected).resourcePublication).toEqual(projected.resourcePublication);
+    expect(diagnostics.projectAcceptanceCheck(summary.check)).toEqual(summary.check);
+    expect(records()).not.toMatch(/PRIVATE_TOKEN|12345|23456|34567|mountNamespace.*PRIVATE/);
+  });
+
   it('captures admission closure and broker rejections before private fixture cleanup', () => {
     const context = prepare();
     invocation();

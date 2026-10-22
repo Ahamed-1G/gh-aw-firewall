@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  HostExecutorJournal, HostExecutorControlDiagnostics, HostExecutorResourceJournal, reapHostExecutorResources,
+  HostExecutorJournal, HostExecutorControlDiagnostics, HostExecutorInvocationDiagnostics,
+  HostExecutorResourceJournal, reapHostExecutorResources,
   hostExecutorVmRunId, hostExecutorJournalDirectory,
   HOST_EXECUTOR_STORAGE_ROOT, hostExecutorStorageDirectory,
 } from './host-executor-journal';
@@ -199,6 +200,33 @@ describe('durable host executor journal', () => {
     if (captureSnapshotMount) await journal.captureStorageMount();
     return { journal, storageRoot, snapshot };
   }
+
+  it.each([16, 24, 32, 64])('discovers a real published resource journal with a %s-character invocation ID', async length => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reader = require('../../scripts/ci/cloud-hypervisor-enclave-live-smoke.js') as {
+      resourceRecords(directory: string): Array<{ file: string; record: unknown }>;
+      waitForInvocationRecord(directory: string, existing: Set<string>, owner: number, timeout: number): Promise<{
+        record: { invocationId: string };
+        inventory: Record<string, unknown>;
+      }>;
+    };
+    plan = { ...plan, invocationId: 'b'.repeat(length),
+      invocationHostDir: path.join(run.invocationsDir, 'script', 'b'.repeat(length)) };
+    const diagnostic = new HostExecutorInvocationDiagnostics(run, plan);
+    const existing = new Set(reader.resourceRecords(run.journalDir!).map(entry => entry.file));
+    await aggregateStorageJournal();
+    diagnostic.resourcePublished(run, plan);
+    fs.writeFileSync(path.join(run.journalDir!, 'ignored.resources.json'), 'PRIVATE_SENTINEL', { mode: 0o600 });
+    const found = await reader.waitForInvocationRecord(run.journalDir!, existing, process.pid, 1000);
+    expect(found.record.invocationId).toBe(plan.invocationId);
+    expect(found.inventory).toMatchObject({
+      directory: 'ready', resourceSuffix: 'many', nameMatches: 'one', rejectedNames: 'one',
+      producer: 'published', producerDirectory: 'same', producerLocation: 'custom',
+      producerRecordSafe: true, producerActive: true,
+    });
+    expect(JSON.stringify(found.inventory)).not.toContain(root);
+    expect(JSON.stringify(found.inventory)).not.toContain('PRIVATE_SENTINEL');
+  });
 
   const captureIds = [
     'canonical-path', 'mountinfo-read', 'mountinfo-parse', 'mountinfo-topology', 'match-count', 'filesystem', 'source',

@@ -435,6 +435,7 @@ export class CloudHypervisorHostEnclaveExecutorBackend implements HostEnclaveExe
         this.options.preflight.tools,
         async () => {
           resourceJournal = await this.dependencies.createResourceJournal(this.options.runState, plan, runId);
+          diagnostic.resourcePublished(this.options.runState, plan);
           if (this.dependencies.prepareInvocationStorage) {
             invocationStorage = await this.dependencies.prepareInvocationStorage(
               this.options.runState, plan, resourceJournal as HostExecutorResourceJournal, this.options.preflight.tools,

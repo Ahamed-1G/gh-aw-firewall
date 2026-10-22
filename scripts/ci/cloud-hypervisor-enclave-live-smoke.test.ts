@@ -154,6 +154,10 @@ const harness = require(harnessPath) as {
   observeInvocationRecords(
     records: Array<{ file: string; record: Record<string, unknown> }>, existing: Set<string>, ownerPid: number,
   ): { counts: Record<string, string>; record?: unknown };
+  resourceRecords(directory: string, inventory?: Record<string, unknown>): Array<{ file: string; record: unknown }>;
+  resourceDiscoveryEvidence(
+    directory: string, ownerPid: number, inventory: Record<string, unknown>,
+  ): Record<string, unknown>;
   waitForInvocationRecord(
     directory: string, existing: Set<string>, ownerPid: number, timeoutMs: number,
     dependencies: { now: () => number; sleep: (ms: number) => Promise<void>;
@@ -1567,6 +1571,82 @@ describe('bounded MCP acceptance check diagnostics', () => {
   });
   beforeEach(() => jest.spyOn(console, 'log').mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
+
+  it('reports missing directories instead of silently treating them as an empty inventory', async () => {
+    const context: { check?: Record<string, unknown> } = {};
+    await expect(harness.acceptanceCheck(context, 'guest-timeout', 'resource-baseline',
+      () => harness.resourceRecords(path.join(root, sentinel, 'missing')))).rejects.toThrow();
+    expect(context.check).toMatchObject({ reason: 'resource-inventory-failed', inventory: {
+      operation: 'directory-lstat', directory: 'missing', code: 'ENOENT',
+    } });
+    expect(JSON.stringify(context)).not.toContain(sentinel);
+  });
+
+  it.each(['directory-readdir', 'record-open', 'record-fstat', 'record-read', 'record-close',
+    'record-validate', 'record-parse', 'record-identity'])(
+    'identifies the exact failed inventory operation: %s', async operation => {
+      const directory = fs.mkdtempSync(path.join(root, '.resource-reader-'));
+      const file = path.join(directory, `${'a'.repeat(32)}-${'b'.repeat(32)}.resources.json`);
+      const nodeFs = require('fs') as typeof fs;
+      const context: { check?: Record<string, unknown> } = {};
+      try {
+        fs.writeFileSync(file, operation === 'record-parse' ? sentinel : JSON.stringify({
+          state: 'pending', runId: 'a'.repeat(32),
+          invocationId: (operation === 'record-identity' ? 'c' : 'b').repeat(32),
+        }), { mode: 0o600 });
+        if (operation === 'directory-readdir') {
+          jest.spyOn(nodeFs, 'readdirSync').mockImplementation(() => {
+            throw Object.assign(new Error(sentinel), { code: 'EACCES' });
+          });
+        }
+        const ioError = () => { throw Object.assign(new Error(sentinel), { code: 'EIO' }); };
+        if (operation === 'record-open') jest.spyOn(nodeFs, 'openSync').mockImplementation(ioError);
+        if (operation === 'record-fstat') jest.spyOn(nodeFs, 'fstatSync').mockImplementation(ioError);
+        if (operation === 'record-read') jest.spyOn(nodeFs, 'readSync').mockImplementation(ioError);
+        if (operation === 'record-close') {
+          const close = fs.closeSync;
+          jest.spyOn(nodeFs, 'closeSync').mockImplementation(fd => { close(fd); ioError(); });
+        }
+        if (operation === 'record-validate') fs.chmodSync(file, 0o644);
+        await expect(harness.acceptanceCheck(context, 'guest-timeout', 'resource-baseline',
+          () => harness.resourceRecords(directory))).rejects.toThrow();
+        expect(context.check).toMatchObject({ reason: 'resource-inventory-failed', inventory: { operation } });
+        expect(JSON.stringify(context)).not.toContain(sentinel);
+      } finally {
+        jest.restoreAllMocks();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('compares producer directory identity and namespaces without exporting either identity', () => {
+    const directory = fs.mkdtempSync(path.join(root, '.resource-producer-'));
+    const nodeFs = require('fs') as typeof fs;
+    try {
+      fs.mkdirSync(path.join(directory, 'diagnostics'), { mode: 0o700 });
+      const file = path.join(directory, 'diagnostics', `${'a'.repeat(32)}-${'b'.repeat(32)}.json`);
+      fs.writeFileSync(file, JSON.stringify({
+        milestones: [], resourcePublication: {
+          ownerPid: 123, status: 'published', location: 'default', recordSafe: true,
+          directoryIdentity: { device: -1, inode: -1 }, mountNamespace: sentinel,
+        },
+      }), { mode: 0o600 });
+      const originalReadlink = fs.readlinkSync;
+      jest.spyOn(nodeFs, 'readlinkSync').mockImplementation((...args) => {
+        if (args[0] === '/proc/self/ns/mnt') return 'observer-namespace';
+        if (args[0] === '/proc/123/ns/mnt') return 'host-namespace';
+        return originalReadlink(...args);
+      });
+      expect(harness.resourceDiscoveryEvidence(directory, 123, {})).toMatchObject({
+        producer: 'published', producerDirectory: 'different',
+        mountNamespace: 'different', producerNamespace: 'different', producerActive: true,
+      });
+      expect(JSON.stringify(harness.resourceDiscoveryEvidence(directory, 123, {}))).not.toContain(sentinel);
+    } finally {
+      jest.restoreAllMocks();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it.each(['timeout', 'cancelled'] as const)('requires both durable terminal and settled %s evidence', async outcome => {
     const identity = { runId: 'a'.repeat(32), entryId: 'script', invocationId: 'b'.repeat(32) };

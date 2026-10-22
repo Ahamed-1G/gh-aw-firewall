@@ -279,6 +279,19 @@ export class HostExecutorInvocationDiagnostics {
     guestSession?: EnclaveSessionDiagnostics;
     guestFileOperations?: EnclaveSessionDiagnostics['operationErrors'];
     guestWrapperFailure?: EnclaveSessionDiagnostics['lastEvent'];
+    resourcePublication?: {
+      status: 'published' | 'failed';
+      operation: 'directory-lstat' | 'record-lstat';
+      code: string;
+      location: 'default' | 'custom';
+      ownerPid: number;
+      directoryIdentity?: { device: number; inode: number };
+      mountNamespace?: string;
+      namespaceStatus: 'captured' | 'unavailable';
+      recordSafe?: boolean;
+      runIdLength: number;
+      invocationIdLength: number;
+    };
   };
 
   constructor(run: HostExecutorRunState, plan: HostExecutorInvocationPlan) {
@@ -295,6 +308,37 @@ export class HostExecutorInvocationDiagnostics {
       executorKind: plan.executorKind, sequence: 0, elapsedMs: 0, checks: {}, milestones: [],
     };
     persist(this.file, this.snapshot);
+  }
+
+  resourcePublished(run: HostExecutorRunState, plan: HostExecutorInvocationPlan): void {
+    const directory = hostExecutorJournalDirectory(run);
+    const evidence: NonNullable<typeof this.snapshot.resourcePublication> = {
+      status: 'failed', operation: 'directory-lstat', code: 'none',
+      location: directory === HOST_EXECUTOR_DEFAULT_JOURNAL_DIRECTORY ? 'default' : 'custom',
+      ownerPid: process.pid, namespaceStatus: 'unavailable',
+      runIdLength: run.runId.length, invocationIdLength: plan.invocationId.length,
+    };
+    try {
+      const stat = fs.lstatSync(directory);
+      evidence.directoryIdentity = { device: stat.dev, inode: stat.ino };
+      evidence.operation = 'record-lstat';
+      const record = fs.lstatSync(path.join(directory, `${run.runId}-${plan.invocationId}.resources.json`));
+      evidence.recordSafe = record.isFile() && !record.isSymbolicLink()
+        && record.uid === process.getuid?.() && record.nlink === 1 && (record.mode & 0o077) === 0;
+      evidence.status = 'published';
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      evidence.code = typeof code === 'string' && ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR'].includes(code)
+        ? code : 'unknown';
+    }
+    try {
+      evidence.mountNamespace = fs.readlinkSync('/proc/self/ns/mnt');
+      evidence.namespaceStatus = 'captured';
+    } catch {
+      evidence.namespaceStatus = 'unavailable';
+    }
+    this.snapshot.resourcePublication = evidence;
+    this.commit();
   }
 
   milestone(
