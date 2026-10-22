@@ -1502,6 +1502,16 @@ egress.
 Both script (1 GiB) and agent (512 MiB) guests must produce actual guest-visible
 aggregate `ENOSPC` within a write bound no larger than their configured role
 ceiling; the probe removes its files before returning a canonical result. A
+storage probe immediately reads its result through both `/output/out` and
+`/awf/out`, compares each bounded read with the expected JSON, and verifies that
+the compatibility symlink names `/output/out` and both paths identify the same
+file. The agent wrapper independently checks the link, file identity and bounded
+contents through both paths before and after engine execution. Public evidence
+retains only boolean comparisons, size-state buckets and precise failed
+operations/errno, never contents, link-target text, hashes or inode/device numbers.
+These observations do not replace the required result channel or change result
+acceptance; Docker's direct file mount at `/awf/out` is not required to be a
+symlink. A
 guest memory-pressure probe requires an increased guest `oom_kill` counter and
 the memory-consuming child to exit by `SIGKILL`. The harness also requires
 canonical guest-failure and timeout responses. Timeout and cancellation must

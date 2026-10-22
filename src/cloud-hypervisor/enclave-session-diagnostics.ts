@@ -26,8 +26,13 @@ const OUTPUT_PATHS = ['output-parent', 'output-directory', 'output-link', 'outpu
 const STORAGE_PROBE_STATUSES = ['captured', 'missing', 'unsafe', 'oversized', 'invalid', 'read-failed'] as const;
 const STORAGE_PROBE_STAGES = [
   'started', 'storage-complete', 'cleanup-started', 'cleanup-complete',
-  'output-write-started', 'output-write-complete',
+  'output-write-started', 'output-write-complete', 'output-check-failed', 'output-verified',
 ];
+const OUTPUT_FLAGS = ['symlink', 'targetMatches', 'sameFile', 'directReadable', 'aliasReadable'];
+const STORAGE_PROBE_FLAGS = [...OUTPUT_FLAGS, 'enospcObserved', 'probeFilesRemoved',
+  'directMatchesExpected', 'aliasMatchesExpected'];
+const STORAGE_PROBE_OPERATIONS = ['link-lstat', 'link-readlink', 'direct-stat', 'alias-stat',
+  ...['direct', 'alias'].flatMap(id => ['open', 'read', 'close'].map(op => `${id}-${op}`))];
 const FILE_OPERATIONS = [
   'output-reset', 'output-read', 'output-write', 'task-input-read', 'schema-input-read',
   'github-agent-id-read', 'github-bearer-read', 'github-mcp-config-write',
@@ -43,6 +48,9 @@ const OPERATIONS = [
   ...['home-directory', 'copilot-directory', 'copilot-log-directory'].map(id => `runtime-path-creation-${id}`),
   ...['agent-directory', 'temporary-directory', 'shared-memory'].map(id => `resource-${id}-statvfs`),
   ...OUTPUT_PATHS.flatMap(id => [`snapshot-${id}-stat`, `snapshot-${id}-lstat`]),
+  'verify-output-link-lstat', 'verify-output-link-readlink',
+  ...['direct', 'alias'].flatMap(id =>
+    ['open', 'fstat', 'validate', 'read', 'close'].map(op => `verify-output-${id}-${op}`)),
 ];
 type SafeEvent = Record<string, string | number | boolean | null>;
 
@@ -63,6 +71,7 @@ export interface EnclaveSessionDiagnostics {
     inputState: 'empty' | 'within-limit' | 'oversized';
     stdoutState: 'empty' | 'present';
   };
+  outputVerification?: SafeEvent[];
   output?: {
     stage: 'before-engine' | 'after-engine';
     uid: number | 'other';
@@ -163,20 +172,38 @@ export function projectEnclaveSessionDiagnostics(bytes: Buffer): EnclaveSessionD
           for (const item of value.milestones) {
             const source = record(item);
             if (!source || !allowed(source.stage, STORAGE_PROBE_STAGES)
-                || ['enospcObserved', 'probeFilesRemoved'].some(key =>
-                  source[key] !== undefined && typeof source[key] !== 'boolean')) {
+                || STORAGE_PROBE_FLAGS.some(key => source[key] !== undefined && typeof source[key] !== 'boolean')
+                || (source.operation !== undefined && !allowed(source.operation, STORAGE_PROBE_OPERATIONS))
+                || (source.errno !== undefined && (!integer(source.errno) || source.errno > 4095))) {
               status = 'invalid';
               break;
             }
             const milestone: SafeEvent = { stage: source.stage };
-            for (const key of ['enospcObserved', 'probeFilesRemoved']) {
+            for (const key of STORAGE_PROBE_FLAGS) {
               if (typeof source[key] === 'boolean') milestone[key] = source[key];
             }
+            if (allowed(source.operation, STORAGE_PROBE_OPERATIONS)) milestone.operation = source.operation;
+            if (integer(source.errno) && source.errno <= 4095) milestone.errno = source.errno;
             milestones.push(milestone);
           }
         }
       }
       result.storageProbe = { status, milestones: status === 'captured' ? milestones : [] };
+      continue;
+    }
+    if (value.event === 'output-verification' && allowed(value.stage, ['before-engine', 'after-engine'])) {
+      const verification: SafeEvent = { stage: value.stage };
+      for (const key of [...OUTPUT_FLAGS, 'contentsMatch']) {
+        if (typeof value[key] === 'boolean') verification[key] = value[key];
+      }
+      for (const key of ['directState', 'aliasState']) {
+        if (allowed(value[key], ['empty', 'within-limit', 'oversized', 'unavailable'])) {
+          verification[key] = value[key];
+        }
+      }
+      result.outputVerification ??= [];
+      result.outputVerification = result.outputVerification.filter(item => item.stage !== value.stage);
+      result.outputVerification.push(verification);
       continue;
     }
     if (value.event === 'output-normalization'
@@ -252,7 +279,7 @@ export function projectEnclaveSessionDiagnostics(bytes: Buffer): EnclaveSessionD
     else result.dropped! += 1;
   }
   if (result.events!.length === 0 && !result.resources && !result.output
-      && !result.storageProbe && !result.normalization) result.status = 'invalid';
+      && !result.storageProbe && !result.normalization && !result.outputVerification) result.status = 'invalid';
   return result;
 }
 

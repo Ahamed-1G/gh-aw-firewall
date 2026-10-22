@@ -1298,6 +1298,26 @@ function buildEnospcProbeScript(maxStorageMib = 1024) {
     'with open("/output/out", "w", encoding="utf8") as output:',
     '    output.write(encoded)',
     'record("output-write-complete")',
+    'def check(operation, action):',
+    '    try: return action()',
+    '    except OSError as error:',
+    '        record("output-check-failed", operation=operation, errno=error.errno)',
+    'def readback(name, label):',
+    '    handle = check(label+"-open", lambda: open(name, "rb", opener=lambda n,f: os.open(n,f|os.O_NONBLOCK)))',
+    '    if handle is None: return None',
+    '    try: return check(label+"-read", lambda: handle.read(1025))',
+    '    finally: check(label+"-close", handle.close)',
+    'link = check("link-lstat", lambda: os.lstat("/awf/out"))',
+    'is_link = link is not None and stat.S_ISLNK(link.st_mode)',
+    'target = check("link-readlink", lambda: os.readlink("/awf/out")) if is_link else None',
+    'direct = readback("/output/out", "direct")',
+    'alias = readback("/awf/out", "alias")',
+    'a = check("direct-stat", lambda: os.stat("/output/out"))',
+    'b = check("alias-stat", lambda: os.stat("/awf/out"))',
+    'record("output-verified", symlink=is_link, targetMatches=target=="/output/out",',
+    '       sameFile=a is not None and b is not None and (a.st_dev,a.st_ino)==(b.st_dev,b.st_ino),',
+    '       directReadable=direct is not None, aliasReadable=alias is not None,',
+    '       directMatchesExpected=direct==encoded.encode(), aliasMatchesExpected=alias==encoded.encode())',
   ].join('\n');
 }
 
@@ -1313,7 +1333,7 @@ function buildAgentEnospcProbe() {
       buildEnospcProbeScript(512),
       'PY',
       '```',
-      'Return exactly the JSON object printed by the diagnostic, with no extra fields. Write that exact object to /awf/out as required by your result contract.',
+      'Return the diagnostic\'s exact JSON object, without extra fields, in /awf/out.',
     ].join('\n'),
   };
 }

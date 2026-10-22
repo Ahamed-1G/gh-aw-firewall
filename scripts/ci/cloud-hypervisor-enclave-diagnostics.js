@@ -302,6 +302,9 @@ function projectInvocation(value) {
     if (session.output) events.push({ ...session.output, event: 'output-snapshot' });
     if (session.storageProbe) events.push({ ...session.storageProbe, event: 'storage-probe' });
     if (session.normalization) events.push({ ...session.normalization, event: 'output-normalization' });
+    if (Array.isArray(session.outputVerification)) {
+      events.push(...session.outputVerification.slice(-2).map(value => ({ ...value, event: 'output-verification' })));
+    }
     if (session.resources) {
       events.push({
         ...session.resources, event: 'resource-snapshot',

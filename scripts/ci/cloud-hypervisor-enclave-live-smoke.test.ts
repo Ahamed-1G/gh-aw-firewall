@@ -1204,7 +1204,10 @@ describe('Cloud Hypervisor enclave live acceptance harness', () => {
     })).not.toThrow();
   });
 
-  it.each(['success', 'output-failure', 'cleanup-failure', 'diagnostic-failure', 'both-fail'])(
+  it.each(['success', 'output-failure', 'cleanup-failure', 'diagnostic-failure', 'both-fail',
+    'wrong-link', 'regular-link', 'broken-link', 'direct-read-failure', 'alias-read-failure',
+    'link-lstat-failure', 'link-readlink-failure', 'direct-stat-failure', 'alias-stat-failure',
+    'direct-close-failure', 'alias-close-failure'])(
     'observes the real storage probe boundaries under %s without allocating disk', scenario => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-probe-milestones-'));
       try {
@@ -1214,8 +1217,20 @@ root, scenario = sys.argv[1:]
 source = sys.stdin.read()
 real_open, real_write, real_close = os.open, os.write, os.close
 real_file, real_exists = builtins.open, os.path.exists
+real_lstat, real_stat, real_readlink = os.lstat, os.stat, os.readlink
 marker = root + "/marker.jsonl"
 output = root + "/out"
+alias = root + "/alias"
+source = source.replace('"/output/out"', json.dumps(output)).replace('"/awf/out"', json.dumps(alias))
+if scenario == "regular-link":
+    with real_file(alias, "wb") as handle: handle.write(b"false")
+else:
+    target = output
+    if scenario in ("wrong-link", "broken-link"):
+        target = root + "/other"
+        if scenario == "wrong-link":
+            with real_file(target, "wb") as handle: handle.write(b"false")
+    os.symlink(target, alias)
 probe_fd = 100000
 def open_fd(name, flags, mode=0o777):
     if name == "/tmp/.awf-enclave-storage-probe.jsonl":
@@ -1224,6 +1239,8 @@ def open_fd(name, flags, mode=0o777):
         return real_open(marker, flags, mode)
     if name.startswith("/output/.awf-live-enospc-"):
         return probe_fd
+    if name in (output, alias):
+        return real_open(name, flags, mode)
     raise AssertionError("unexpected file")
 def write_fd(fd, data):
     if fd == probe_fd:
@@ -1233,11 +1250,32 @@ def unlink(name):
     if scenario == "cleanup-failure":
         raise PermissionError(errno.EACCES, "PRIVATE_CLEANUP_ERROR")
 def open_file(name, *args, **kwargs):
-    if name != "/output/out":
+    if name not in (output, alias):
         raise AssertionError("unexpected output")
     if scenario == "output-failure":
         raise OSError(errno.EIO, "PRIVATE_OUTPUT_ERROR")
-    return real_file(output, *args, **kwargs)
+    handle = real_file(name, *args, **kwargs)
+    if args and args[0] == "rb":
+        label = "direct" if name == output else "alias"
+        class Reader:
+            def read(self, size):
+                assert size == 1025
+                if scenario == label + "-read-failure":
+                    raise OSError(errno.EIO, "PRIVATE_READ_ERROR")
+                return handle.read(size)
+            def close(self):
+                handle.close()
+                if scenario == label + "-close-failure":
+                    raise OSError(errno.EIO, "PRIVATE_CLOSE_ERROR")
+        return Reader()
+    return handle
+def inspect(operation, action):
+    if scenario == operation + "-failure":
+        raise OSError(errno.EIO, "PRIVATE_INSPECT_ERROR")
+    return action()
+os.lstat = lambda name: inspect("link-lstat", lambda: real_lstat(name))
+os.readlink = lambda name: inspect("link-readlink", lambda: real_readlink(name))
+os.stat = lambda name: inspect("direct-stat" if name == output else "alias-stat", lambda: real_stat(name))
 os.open, os.write = open_fd, write_fd
 os.close = lambda fd: None if fd == probe_fd else real_close(fd)
 os.unlink = unlink
@@ -1249,6 +1287,7 @@ with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(errors):
         exec(compile(source, "<reviewed-storage-probe>", "exec"), {})
     except OSError as error:
         failure = error.errno
+os.lstat, os.stat, os.readlink = real_lstat, real_stat, real_readlink
 milestones = []
 if real_exists(marker):
     with real_file(marker, encoding="ascii") as handle:
@@ -1261,7 +1300,7 @@ print(json.dumps({"milestones": milestones, "output": value, "failure": failure,
 `, directory, scenario], {
           input: harness.buildEnospcProbeScript(512), encoding: 'utf8',
         }));
-        if (scenario === 'success' || scenario === 'diagnostic-failure') {
+        if (!['output-failure', 'cleanup-failure', 'both-fail'].includes(scenario)) {
           expect(result.failure).toBeNull();
           expect(result.output).toEqual({ enospcObserved: true, probeFilesRemoved: true });
         } else {
@@ -1273,17 +1312,41 @@ print(json.dumps({"milestones": milestones, "output": value, "failure": failure,
           expect(stages).toEqual([
             'started', 'storage-complete', 'cleanup-started', 'cleanup-complete',
             'output-write-started', 'output-write-complete',
+            'output-verified',
           ]);
           expect(result.milestones[1].enospcObserved).toBe(true);
           expect(result.milestones[3].probeFilesRemoved).toBe(true);
+          expect(result.milestones[result.milestones.length - 1]).toEqual({
+            stage: 'output-verified', symlink: true, targetMatches: true, sameFile: true,
+            directReadable: true, aliasReadable: true, directMatchesExpected: true, aliasMatchesExpected: true,
+          });
         } else if (scenario === 'output-failure') {
           expect(stages[stages.length - 1]).toBe('output-write-started');
         } else if (scenario === 'cleanup-failure') {
           expect(stages[stages.length - 1]).toBe('cleanup-started');
-        } else {
+        } else if (scenario === 'diagnostic-failure' || scenario === 'both-fail') {
           expect(stages).toEqual([]);
           expect(result.errors).toContain('AWF_ENCLAVE_PROBE_DIAGNOSTIC write-failed');
+        } else {
+          const verification = result.milestones[result.milestones.length - 1];
+          expect(verification.stage).toBe('output-verified');
+          expect(verification.directMatchesExpected).toBe(scenario !== 'direct-read-failure');
+          expect(verification.aliasMatchesExpected).toBe(
+            !['wrong-link', 'regular-link', 'broken-link', 'alias-read-failure'].includes(scenario),
+          );
+          expect(verification.targetMatches).toBe(
+            !['wrong-link', 'regular-link', 'broken-link', 'link-lstat-failure', 'link-readlink-failure'].includes(scenario),
+          );
+          if (scenario.endsWith('-failure')) {
+            expect(result.milestones).toContainEqual({
+              stage: 'output-check-failed', operation: scenario.slice(0, -'-failure'.length), errno: 5,
+            });
+          }
+          if (scenario === 'wrong-link' || scenario === 'regular-link' || scenario === 'broken-link') {
+            expect(verification.sameFile).toBe(false);
+          }
         }
+        expect(JSON.stringify(result.milestones)).not.toContain(directory);
         expect(result.errors).not.toContain('PRIVATE_');
       } finally {
         fs.rmSync(directory, { recursive: true, force: true });

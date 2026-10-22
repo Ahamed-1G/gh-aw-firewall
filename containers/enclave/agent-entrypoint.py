@@ -40,7 +40,15 @@ MAX_RESOURCE_ENTRIES = 10_000
 MAX_STORAGE_PROBE_BYTES = 4096
 STORAGE_PROBE_STAGES = {
     "started", "storage-complete", "cleanup-started", "cleanup-complete",
-    "output-write-started", "output-write-complete",
+    "output-write-started", "output-write-complete", "output-check-failed", "output-verified",
+}
+STORAGE_PROBE_FLAGS = (
+    "enospcObserved", "probeFilesRemoved", "symlink", "targetMatches", "sameFile",
+    "directReadable", "aliasReadable", "directMatchesExpected", "aliasMatchesExpected",
+)
+STORAGE_PROBE_OPERATIONS = {
+    "link-lstat", "link-readlink", "direct-stat", "alias-stat",
+    "direct-open", "direct-read", "direct-close", "alias-open", "alias-read", "alias-close",
 }
 MAX_STARTUP_RETRIES = 2
 STARTUP_CRASH_WINDOW_SECONDS = 30
@@ -235,11 +243,20 @@ def append_storage_probe_snapshot() -> None:
                                 or value["stage"] not in STORAGE_PROBE_STAGES:
                             raise ValueError("invalid probe stage")
                         milestone = {"stage": value["stage"]}
-                        for key in ("enospcObserved", "probeFilesRemoved"):
+                        for key in STORAGE_PROBE_FLAGS:
                             if key in value:
                                 if not isinstance(value[key], bool):
                                     raise ValueError("invalid probe flag")
                                 milestone[key] = value[key]
+                        if "operation" in value:
+                            if not isinstance(value["operation"], str) \
+                                    or value["operation"] not in STORAGE_PROBE_OPERATIONS:
+                                raise ValueError("invalid probe operation")
+                            milestone["operation"] = value["operation"]
+                        if "errno" in value:
+                            if type(value["errno"]) is not int or not 0 <= value["errno"] <= 4095:
+                                raise ValueError("invalid probe errno")
+                            milestone["errno"] = value["errno"]
                         milestones.append(milestone)
                     event.update({"status": "captured", "milestones": milestones})
     except OSError as error:
@@ -401,6 +418,64 @@ def append_resource_snapshot(stage: str, max_output: int) -> None:
         "gid": os.getgid(),
         "paths": paths,
     })
+    append_output_verification(stage, max_output)
+
+
+def append_output_verification(stage: str, max_output: int) -> None:
+    event = {"event": "output-verification", "stage": stage}
+    direct_path = OUTPUT_DIR / "out"
+    try:
+        link = file_operation("verify-output-link-lstat", OUT_PATH.lstat, fatal=False)
+        event["symlink"] = stat.S_ISLNK(link.st_mode)
+        if event["symlink"]:
+            target = file_operation(
+                "verify-output-link-readlink", lambda: os.readlink(OUT_PATH), fatal=False,
+            )
+            event["targetMatches"] = target == str(direct_path)
+    except OSError:
+        pass
+
+    def readback(path: Path, label: str):
+        operation = f"verify-output-{label}"
+        handle = None
+        try:
+            handle = file_operation(
+                f"{operation}-open", lambda: open(path, "rb", opener=lambda name, flags:
+                    os.open(name, flags | os.O_NONBLOCK)), fatal=False,
+            )
+            metadata = file_operation(
+                f"{operation}-fstat", lambda: os.fstat(handle.fileno()), fatal=False,
+            )
+            if not stat.S_ISREG(metadata.st_mode):
+                safe_os_error(OSError(errno.EINVAL, "not a regular file"),
+                              f"{operation}-validate", fatal=False)
+                return None
+            data = file_operation(
+                f"{operation}-read", lambda: handle.read(max_output + 1), fatal=False,
+            )
+            return data, metadata
+        except OSError:
+            return None
+        finally:
+            if handle is not None:
+                try:
+                    file_operation(f"{operation}-close", handle.close, fatal=False)
+                except OSError:
+                    pass
+
+    direct = readback(direct_path, "direct")
+    alias = readback(OUT_PATH, "alias")
+    for label, observed in (("direct", direct), ("alias", alias)):
+        event[f"{label}Readable"] = observed is not None
+        event[f"{label}State"] = "unavailable" if observed is None else \
+            "empty" if not observed[0] else \
+            "within-limit" if len(observed[0]) <= max_output else "oversized"
+    if direct is not None and alias is not None:
+        event["sameFile"] = (direct[1].st_dev, direct[1].st_ino) == \
+            (alias[1].st_dev, alias[1].st_ino)
+        if len(direct[0]) <= max_output and len(alias[0]) <= max_output:
+            event["contentsMatch"] = direct[0] == alias[0]
+    append_event(event)
 
 
 def os_error_event(error: OSError, operation: str, *, fatal: bool = True) -> dict:

@@ -144,11 +144,17 @@ module.TASK_PATH.write_text(os.environ["PRIVATE_TASK"], encoding="utf-8")
 module.SCHEMA_PATH.write_text('{"type":"boolean"}', encoding="utf-8")
 module.OUT_PATH.write_text("", encoding="utf-8")
 module.OUT_PATH.chmod(0o600)
+if scenario.startswith("output-alias") or scenario == "verify-io":
+    module.OUTPUT_DIR = root / "output"
+    module.OUTPUT_DIR.mkdir()
+    module.OUT_PATH.unlink()
+    (module.OUTPUT_DIR / "out").write_bytes(b"")
+    module.OUT_PATH.symlink_to(module.OUTPUT_DIR / "out")
 module.SESSION_LOG_PATH.write_text("", encoding="utf-8")
 module.GITHUB_AGENT_ID_PATH.write_text(os.environ["TEST_GITHUB_AGENT_ID"], encoding="ascii")
 module.GITHUB_BEARER_PATH.write_text("private-delegated-bearer-sentinel", encoding="ascii")
 
-if scenario == "injected-io":
+if scenario in ("injected-io", "verify-io"):
     original_operation = module.file_operation
     def injected_operation(operation, action, *, fatal=True):
         if operation != os.environ["FAULT_OPERATION"]:
@@ -183,6 +189,18 @@ def engine_result(completed):
         module.OUT_PATH.chmod(0o640)
     elif scenario == "probe-output-empty":
         module.OUT_PATH.write_bytes(b"")
+    elif scenario == "output-alias-wrong":
+        other = root / "other"
+        other.write_bytes(b"false")
+        module.OUT_PATH.unlink()
+        module.OUT_PATH.symlink_to(other)
+    elif scenario == "output-alias-regular":
+        module.OUT_PATH.unlink()
+        module.OUT_PATH.write_bytes(b"true")
+    elif scenario == "output-alias-broken":
+        (module.OUTPUT_DIR / "out").unlink()
+    elif scenario == "output-alias-empty":
+        (module.OUTPUT_DIR / "out").write_bytes(b"")
     return original_engine_result(completed)
 module.append_engine_result = engine_result
 
@@ -503,6 +521,52 @@ describe('enclave agent protected entrypoint diagnostics', () => {
     expect(transcript).toContainEqual({ event: 'storage-probe', status: 'missing', milestones: [] });
   });
 
+    it('reads both real output paths and verifies the compatibility link before and after the engine', () => {
+      const result = runHarness('output-alias');
+      expect(result.exitCode).toBe(0);
+      expect(events(result).filter(event => event.event === 'output-verification')).toEqual([
+        { event: 'output-verification', stage: 'before-engine', symlink: true, targetMatches: true,
+          sameFile: true, contentsMatch: true, directReadable: true, aliasReadable: true,
+          directState: 'empty', aliasState: 'empty' },
+        { event: 'output-verification', stage: 'after-engine', symlink: true, targetMatches: true,
+          sameFile: true, contentsMatch: true, directReadable: true, aliasReadable: true,
+          directState: 'within-limit', aliasState: 'within-limit' },
+      ]);
+      expect(result.transcript).not.toContain('awf-enclave-entrypoint-');
+    });
+
+    it.each([
+      ['output-alias-wrong', 0, { symlink: true, targetMatches: false, sameFile: false, contentsMatch: false }],
+      ['output-alias-regular', 0, { symlink: false, sameFile: false, contentsMatch: true }],
+      ['output-alias-broken', 32, { symlink: true, targetMatches: true,
+        directReadable: false, aliasReadable: false, directState: 'unavailable', aliasState: 'unavailable' }],
+      ['output-alias-empty', 33, { symlink: true, targetMatches: true, sameFile: true,
+        contentsMatch: true, directState: 'empty', aliasState: 'empty' }],
+    ] as Array<[string, number, Record<string, unknown>]>)(
+      'distinguishes %s without substituting the direct path for the required result', (scenario, exitCode, expected) => {
+        const result = runHarness(scenario);
+        expect(result.exitCode).toBe(exitCode);
+        expect(events(result)).toContainEqual(expect.objectContaining({
+          event: 'output-verification', stage: 'after-engine', ...expected,
+        }));
+        expect(result.transcript).not.toContain('awf-enclave-entrypoint-');
+      },
+    );
+
+    it.each([
+      'link-lstat', 'link-readlink',
+      ...['direct', 'alias'].flatMap(label => ['open', 'fstat', 'read', 'close'].map(op => `${label}-${op}`)),
+    ])('preserves precise nonfatal verification errors for %s', suffix => {
+      const operation = `verify-output-${suffix}`;
+      const result = runHarness('verify-io', { FAULT_OPERATION: operation, FAULT_ERRNO: '5' });
+      expect(result.exitCode).toBe(0);
+      expect(events(result)).toContainEqual(expect.objectContaining({
+        event: 'operation-error', operation, errno: 5, fatal: false,
+      }));
+      expect(result.transcript).not.toContain('test-secret-token-value');
+      expect(result.transcript).not.toContain('/private/repository/secret-path');
+    });
+
   it('distinguishes a reported probe write from the wrapper actual empty input without accepting stdout', () => {
     const milestones = [
       { stage: 'started', message: 'PRIVATE_PROBE_TEXT' },
@@ -542,6 +606,10 @@ describe('enclave agent protected entrypoint diagnostics', () => {
     ['success', { PROBE_MARKER: '{"stage":"PRIVATE_STAGE"}' }, 'invalid'],
     ['success', { PROBE_MARKER: '{"stage":"started","enospcObserved":"PRIVATE_FLAG"}' }, 'invalid'],
     ['success', { PROBE_MARKER: '{"stage":[]}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"output-check-failed","operation":{}}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"output-check-failed","operation":"PRIVATE_OPERATION"}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"output-check-failed","errno":true}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"output-verified","sameFile":"PRIVATE_FLAG"}' }, 'invalid'],
     ['success', { PROBE_MARKER: '{"stage":"started"}\n'.repeat(17) }, 'invalid'],
   ] as Array<[string, Record<string, string>, string]>)(
     'safely reports an unavailable %s marker without changing the result', (scenario, extraEnv, status) => {

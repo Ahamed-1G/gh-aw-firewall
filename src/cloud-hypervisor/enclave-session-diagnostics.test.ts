@@ -174,6 +174,70 @@ describe('bounded guest session evidence', () => {
     expect((await read()).storageProbe).toEqual({ status: 'missing', milestones: [] });
   });
 
+  it('retains both verification checkpoints and probe read-back evidence beyond the event cap', async () => {
+    await write([
+      ...Array.from({ length: 40 }, () => ({ event: 'progress', stage: 'engine-started' })),
+      { event: 'output-verification', stage: 'before-engine', symlink: true, targetMatches: true,
+        sameFile: true, directReadable: true, aliasReadable: true, contentsMatch: true,
+        directState: 'empty', aliasState: 'empty', target: 'PRIVATE_TARGET', inode: 123 },
+      { event: 'storage-probe', status: 'captured', milestones: [
+        { stage: 'output-check-failed', operation: 'alias-read', errno: 5, error: 'PRIVATE_ERROR' },
+        { stage: 'output-verified', symlink: true, targetMatches: true, sameFile: true,
+          directReadable: true, aliasReadable: false, directMatchesExpected: true, aliasMatchesExpected: false,
+          contents: 'PRIVATE_RESULT', hash: 'PRIVATE_HASH' },
+      ] },
+      { event: 'output-verification', stage: 'after-engine', symlink: true, targetMatches: false,
+        sameFile: false, contentsMatch: false, directState: 'within-limit', aliasState: 'empty',
+        directReadable: true, aliasReadable: true, bytes: 123, target: 'PRIVATE_TARGET' },
+      { event: 'operation-error', operation: 'verify-output-alias-read', category: 'io-error',
+        errno: 5, fatal: false, message: 'PRIVATE_ERROR' },
+    ]);
+    const result = await read();
+    expect(result.events).toHaveLength(32);
+    expect(result.outputVerification).toEqual([
+      { stage: 'before-engine', symlink: true, targetMatches: true, sameFile: true,
+        contentsMatch: true, directReadable: true, aliasReadable: true, directState: 'empty', aliasState: 'empty' },
+      { stage: 'after-engine', symlink: true, targetMatches: false, sameFile: false,
+        contentsMatch: false, directReadable: true, aliasReadable: true,
+        directState: 'within-limit', aliasState: 'empty' },
+    ]);
+    expect(result.storageProbe).toEqual({ status: 'captured', milestones: [
+      { stage: 'output-check-failed', operation: 'alias-read', errno: 5 },
+      { stage: 'output-verified', symlink: true, targetMatches: true, sameFile: true,
+        directReadable: true, aliasReadable: false, directMatchesExpected: true, aliasMatchesExpected: false },
+    ] });
+    expect(result.operationErrors).toContainEqual({
+      event: 'operation-error', operation: 'verify-output-alias-read', category: 'io-error', errno: 5, fatal: false,
+    });
+    expect(result.failure).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+  });
+
+  it('bounds repeated verification stages and drops malformed fields and stages', async () => {
+    await write([
+      ...Array.from({ length: 100 }, () => ({ event: 'output-verification', stage: 'before-engine', symlink: false })),
+      { event: 'output-verification', stage: 'after-engine', symlink: 'PRIVATE_FLAG',
+        targetMatches: {}, directState: 'PRIVATE_STATE', aliasState: 'unavailable' },
+      { event: 'output-verification', stage: 'PRIVATE_STAGE', contentsMatch: true },
+    ]);
+    const result = await read();
+    expect(result.outputVerification).toEqual([
+      { stage: 'before-engine', symlink: false },
+      { stage: 'after-engine', aliasState: 'unavailable' },
+    ]);
+    expect(result.rejected).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+    for (const milestone of [
+      { stage: 'output-check-failed', operation: {} },
+      { stage: 'output-check-failed', operation: 'PRIVATE_OPERATION' },
+      { stage: 'output-check-failed', errno: true },
+      { stage: 'output-verified', sameFile: 'PRIVATE_FLAG' },
+    ]) {
+      await write([{ event: 'storage-probe', status: 'captured', milestones: [milestone] }]);
+      expect((await read()).storageProbe).toEqual({ status: 'invalid', milestones: [] });
+    }
+  });
+
   it('hands stopped public-session text only to the protected sink, not the audit projection', async () => {
     await write([
       { event: 'engine-result', exitCode: 1, stderr: { raw: 'PUBLIC_ENGINE_FAILURE' } },

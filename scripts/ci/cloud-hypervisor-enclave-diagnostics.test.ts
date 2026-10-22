@@ -397,7 +397,16 @@ describe('public enclave conformance diagnostic retention', () => {
       { event: 'storage-probe', status: 'captured', milestones: [
         { stage: 'storage-complete', enospcObserved: true },
         { stage: 'output-write-complete' },
+        { stage: 'output-verified', symlink: true, targetMatches: true, sameFile: true,
+          directReadable: true, aliasReadable: true, directMatchesExpected: true, aliasMatchesExpected: true },
+        { stage: 'output-check-failed', operation: 'alias-close', errno: 5 },
       ] },
+      { event: 'output-verification', stage: 'before-engine', symlink: true, targetMatches: true,
+        sameFile: true, contentsMatch: true, directState: 'empty', aliasState: 'empty' },
+      { event: 'output-verification', stage: 'after-engine', symlink: true, targetMatches: true,
+        sameFile: true, contentsMatch: true, directState: 'empty', aliasState: 'empty' },
+      { event: 'operation-error', operation: 'verify-output-direct-close', category: 'io-error',
+        errno: 5, fatal: false },
       { event: 'output-normalization', inputState: 'empty', stdoutState: 'present' },
       { event: 'failure', category: 'result-empty' },
     ].map(event => JSON.stringify(event)).join('\n')));
@@ -405,13 +414,29 @@ describe('public enclave conformance diagnostic retention', () => {
     value.guestSession.storageProbe.milestones[0].result = secret;
     value.guestSession.normalization.stdout = secret;
     value.guestSession.normalization.byteCount = 999;
+    value.guestSession.outputVerification[0].target = secret;
+    value.guestSession.outputVerification[1].contents = secret;
     write(file, value);
     diagnostics.collect(context, { status: 'failed', stage: 'resource-limit checks' });
     const retained = JSON.parse(fs.readFileSync(path.join(output, 'upload', 'invocation-1.json'), 'utf8'));
     expect(retained.guestSession.storageProbe).toEqual({ status: 'captured', milestones: [
       { stage: 'storage-complete', enospcObserved: true },
       { stage: 'output-write-complete' },
+      { stage: 'output-verified', symlink: true, targetMatches: true, sameFile: true,
+        directReadable: true, aliasReadable: true, directMatchesExpected: true, aliasMatchesExpected: true },
+      { stage: 'output-check-failed', operation: 'alias-close', errno: 5 },
     ] });
+    expect(retained.guestSession.outputVerification).toEqual([
+      { stage: 'before-engine', symlink: true, targetMatches: true, sameFile: true,
+        contentsMatch: true, directState: 'empty', aliasState: 'empty' },
+      { stage: 'after-engine', symlink: true, targetMatches: true, sameFile: true,
+        contentsMatch: true, directState: 'empty', aliasState: 'empty' },
+    ]);
+    expect(diagnostics.projectInvocation(retained).guestSession.outputVerification)
+      .toEqual(retained.guestSession.outputVerification);
+    expect(retained.guestSession.operationErrors).toContainEqual({
+      event: 'operation-error', operation: 'verify-output-direct-close', category: 'io-error', errno: 5, fatal: false,
+    });
     expect(retained.guestSession.normalization).toEqual({ inputState: 'empty', stdoutState: 'present' });
     expect(retained.guestSession.failure).toEqual({ event: 'failure', category: 'result-empty' });
     expect(records()).not.toContain(secret);
