@@ -2396,6 +2396,28 @@ Directory: `/var/log/cli-proxy/` (or `AWF_CLI_PROXY_LOG_DIR`)
 |------|--------|-------------|----------------|
 | `access.jsonl` | JSONL | CLI proxy request audit records (gh CLI invocations routed through DIFC proxy) | Yes (when CLI proxy is active) |
 
+#### Router Logs
+
+Directory: `<logging.proxyLogsDir>/router-logs/` (or `/tmp/router-logs-<ts>/` when `proxyLogsDir` is not set)
+
+The model router logs only to stderr. At the end of a routed run, AWF stops the router before
+`docker compose down`, so that the router writes its shutdown records, and then copies the
+container's complete log stream into this directory. No container mounts it. The directory
+(`0700`) and the file (`0600`) belong to the user who ran AWF (`SUDO_UID` when AWF runs under
+`sudo`), because a custom router image could log more than the bundled one does. For the same
+reason, `--diagnostic-logs` collection, whose copies become world-readable, leaves the router
+out, and a path whose components include a symlink is refused. Cleanup makes the audit,
+session-state and `<workDir>/diagnostics` directories readable by everyone, so if either the
+capture or preservation destination would be inside any of those trees (including their
+preserved locations), or contain one, AWF doesn't save the router's logs and warns. Protected
+paths containing a `..` component are also refused rather than normalized past a symlink. If the
+router can't be stopped or read within 5 s, AWF logs a warning, keeps whatever it saved and
+continues teardown. AWF writes at most 16 MiB and then stops reading.
+
+| File | Format | Description | Always written |
+|------|--------|-------------|----------------|
+| `router.jsonl` | JSONL (the router's own records: `time`, `level`, `msg`, with no `_schema`) | Startup, routing table load, telemetry setup, one `request` record per router call with its `trace_id`, and shutdown. Never request bodies, headers or model ids; see the [router README](../containers/router/README.md#serving) | Yes (when model routing is active) |
+
 #### API Proxy stdout (Docker logs)
 
 The API proxy also emits JSON lines to stdout (captured by `docker logs`).
