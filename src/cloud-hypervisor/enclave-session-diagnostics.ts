@@ -23,6 +23,11 @@ const CATEGORIES = [
   'operation-not-permitted', 'too-many-open-files',
 ];
 const OUTPUT_PATHS = ['output-parent', 'output-directory', 'output-link', 'output-file'];
+const STORAGE_PROBE_STATUSES = ['captured', 'missing', 'unsafe', 'oversized', 'invalid', 'read-failed'] as const;
+const STORAGE_PROBE_STAGES = [
+  'started', 'storage-complete', 'cleanup-started', 'cleanup-complete',
+  'output-write-started', 'output-write-complete',
+];
 const FILE_OPERATIONS = [
   'output-reset', 'output-read', 'output-write', 'task-input-read', 'schema-input-read',
   'github-agent-id-read', 'github-bearer-read', 'github-mcp-config-write',
@@ -50,6 +55,14 @@ export interface EnclaveSessionDiagnostics {
   lastEvent?: SafeEvent;
   failure?: SafeEvent;
   operationErrors?: SafeEvent[];
+  storageProbe?: {
+    status: typeof STORAGE_PROBE_STATUSES[number];
+    milestones: SafeEvent[];
+  };
+  normalization?: {
+    inputState: 'empty' | 'within-limit' | 'oversized';
+    stdoutState: 'empty' | 'present';
+  };
   output?: {
     stage: 'before-engine' | 'after-engine';
     uid: number | 'other';
@@ -72,8 +85,8 @@ function integer(value: unknown): value is number {
   return Number.isSafeInteger(value) && typeof value === 'number' && value >= 0;
 }
 
-function allowed(value: unknown, values: readonly string[]): value is string {
-  return typeof value === 'string' && values.includes(value);
+function allowed<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === 'string' && values.some(item => item === value);
 }
 
 function projectEvent(value: Record<string, unknown>): SafeEvent | undefined {
@@ -138,6 +151,38 @@ export function projectEnclaveSessionDiagnostics(bytes: Buffer): EnclaveSessionD
     }
     if (!value) {
       result.rejected! += 1;
+      continue;
+    }
+    if (value.event === 'storage-probe' && allowed(value.status, STORAGE_PROBE_STATUSES)) {
+      let status = value.status;
+      const milestones: SafeEvent[] = [];
+      if (status === 'captured') {
+        if (!Array.isArray(value.milestones) || value.milestones.length === 0 || value.milestones.length > 16) {
+          status = 'invalid';
+        } else {
+          for (const item of value.milestones) {
+            const source = record(item);
+            if (!source || !allowed(source.stage, STORAGE_PROBE_STAGES)
+                || ['enospcObserved', 'probeFilesRemoved'].some(key =>
+                  source[key] !== undefined && typeof source[key] !== 'boolean')) {
+              status = 'invalid';
+              break;
+            }
+            const milestone: SafeEvent = { stage: source.stage };
+            for (const key of ['enospcObserved', 'probeFilesRemoved']) {
+              if (typeof source[key] === 'boolean') milestone[key] = source[key];
+            }
+            milestones.push(milestone);
+          }
+        }
+      }
+      result.storageProbe = { status, milestones: status === 'captured' ? milestones : [] };
+      continue;
+    }
+    if (value.event === 'output-normalization'
+        && allowed(value.inputState, ['empty', 'within-limit', 'oversized'] as const)
+        && allowed(value.stdoutState, ['empty', 'present'] as const)) {
+      result.normalization = { inputState: value.inputState, stdoutState: value.stdoutState };
       continue;
     }
     if (value.event === 'output-snapshot' && allowed(value.stage, ['before-engine', 'after-engine'])
@@ -206,7 +251,8 @@ export function projectEnclaveSessionDiagnostics(bytes: Buffer): EnclaveSessionD
     if (result.events!.length < MAX_EVENTS) result.events!.push(event);
     else result.dropped! += 1;
   }
-  if (result.events!.length === 0 && !result.resources && !result.output) result.status = 'invalid';
+  if (result.events!.length === 0 && !result.resources && !result.output
+      && !result.storageProbe && !result.normalization) result.status = 'invalid';
   return result;
 }
 

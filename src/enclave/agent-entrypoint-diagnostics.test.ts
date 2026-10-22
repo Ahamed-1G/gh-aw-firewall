@@ -36,6 +36,7 @@ module.SESSION_LOG_PATH = root / "session.jsonl"
 module.AGENT_DIR = root / "agent"
 module.TEMP_DIR = root / "tmp"
 module.SHARED_MEMORY_DIR = root / "shm"
+module.STORAGE_PROBE_PATH = root / "probe.jsonl"
 module.COPILOT_BIN = str(root / "copilot")
 module.GITHUB_AGENT_ID_PATH = root / "github-agent-id"
 module.GITHUB_BEARER_PATH = root / "github-bearer"
@@ -180,6 +181,8 @@ def engine_result(completed):
         module.OUT_PATH.mkdir()
     elif scenario == "output-mode":
         module.OUT_PATH.chmod(0o640)
+    elif scenario == "probe-output-empty":
+        module.OUT_PATH.write_bytes(b"")
     return original_engine_result(completed)
 module.append_engine_result = engine_result
 
@@ -223,6 +226,12 @@ if scenario == "launch-oserror":
         )
     module.subprocess.Popen = fail_launch
 
+if "PROBE_MARKER" in os.environ:
+    module.STORAGE_PROBE_PATH.write_text(os.environ["PROBE_MARKER"], encoding="utf-8")
+if scenario == "probe-marker-symlink":
+    module.STORAGE_PROBE_PATH.symlink_to(module.TASK_PATH)
+if scenario == "probe-marker-directory":
+    module.STORAGE_PROBE_PATH.mkdir()
 exit_code = module.main()
 transcript = module.SESSION_LOG_PATH.read_text(encoding="utf-8")
 print(json.dumps({
@@ -488,7 +497,61 @@ describe('enclave agent protected entrypoint diagnostics', () => {
       event: 'failure',
       category: 'result-empty',
     });
+    expect(transcript).toContainEqual({
+      event: 'output-normalization', inputState: 'empty', stdoutState: 'present',
+    });
+    expect(transcript).toContainEqual({ event: 'storage-probe', status: 'missing', milestones: [] });
   });
+
+  it('distinguishes a reported probe write from the wrapper actual empty input without accepting stdout', () => {
+    const milestones = [
+      { stage: 'started', message: 'PRIVATE_PROBE_TEXT' },
+      { stage: 'storage-complete', enospcObserved: true },
+      { stage: 'cleanup-complete', probeFilesRemoved: true },
+      { stage: 'output-write-complete' },
+    ];
+    const result = runHarness('probe-output-empty', {
+      PROBE_MARKER: milestones.map(value => JSON.stringify(value)).join('\n'),
+    });
+    expect(result.exitCode).toBe(33);
+    expect(events(result)).toContainEqual({
+      event: 'storage-probe', status: 'captured',
+      milestones: milestones.map(({ stage, ...flags }) => stage === 'started' ? { stage } : { stage, ...flags }),
+    });
+    expect(events(result)).toContainEqual({
+      event: 'output-normalization', inputState: 'empty', stdoutState: 'present',
+    });
+    expect(result.transcript).not.toContain('PRIVATE_PROBE_TEXT');
+  });
+
+  it('keeps an early probe milestone separate from a successful result read', () => {
+    const result = runHarness('success', { PROBE_MARKER: '{"stage":"started"}\n' });
+    expect(result.exitCode).toBe(0);
+    expect(events(result)).toContainEqual({
+      event: 'storage-probe', status: 'captured', milestones: [{ stage: 'started' }],
+    });
+    expect(events(result)).toContainEqual({
+      event: 'output-normalization', inputState: 'within-limit', stdoutState: 'present',
+    });
+  });
+
+  it.each([
+    ['probe-marker-symlink', {}, 'unsafe'],
+    ['probe-marker-directory', {}, 'unsafe'],
+    ['success', { PROBE_MARKER: 'x'.repeat(4097) }, 'oversized'],
+    ['success', { PROBE_MARKER: '{"stage":"PRIVATE_STAGE"}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"started","enospcObserved":"PRIVATE_FLAG"}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":[]}' }, 'invalid'],
+    ['success', { PROBE_MARKER: '{"stage":"started"}\n'.repeat(17) }, 'invalid'],
+  ] as Array<[string, Record<string, string>, string]>)(
+    'safely reports an unavailable %s marker without changing the result', (scenario, extraEnv, status) => {
+      const result = runHarness(scenario, extraEnv);
+      expect(result.exitCode).toBe(0);
+      expect(events(result)).toContainEqual({ event: 'storage-probe', status, milestones: [] });
+      expect(result.transcript).not.toContain('PRIVATE_');
+      expect(result.transcript).not.toContain('private prompt sentinel');
+    },
+  );
 
   it.each<[string, number, string]>([
     ['stdout-only', 33, 'result-empty'],
@@ -507,6 +570,14 @@ describe('enclave agent protected entrypoint diagnostics', () => {
     }));
     expect(result.transcript).not.toContain('private prompt sentinel');
     expect(result.transcript).not.toContain('test-secret-token-value');
+    if (!['output-missing', 'output-directory'].includes(scenario)) {
+      expect(transcript).toContainEqual({
+        event: 'output-normalization',
+        inputState: scenario === 'stdout-only' ? 'empty'
+          : scenario === 'output-oversized' ? 'oversized' : 'within-limit',
+        stdoutState: 'present',
+      });
+    }
   });
 
   it('accepts output exactly at the configured byte limit', () => {

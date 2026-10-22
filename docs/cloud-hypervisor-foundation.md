@@ -1760,6 +1760,26 @@ never copied. The latest snapshot and last 16 operation errors survive the
 These observations do not change permissions or prove which operation a
 Copilot tool attempted; wrapper I/O and tool I/O remain distinct.
 
+The public storage probe also records a small, invocation-private temporary
+marker with fixed milestones: started, storage loop complete (ENOSPC observed
+or not), cleanup started/completed (probe files removed or not), and result
+write started/completed. The wrapper reads at most 4 KiB and 16 records after
+engine execution, rejects symlinks/non-regular files, and emits only allowlisted
+stages and boolean flags as `storageProbe`. Missing, unsafe, oversized, invalid,
+and unreadable markers have explicit statuses. Diagnostic writes are best-effort
+and report failures without replacing the original probe error or result.
+
+At its actual result read, the wrapper separately emits `normalization` with
+an empty/within-limit/oversized input category and empty/present conversational
+stdout. These records survive the event cap and are reprojected before upload;
+no marker text, result values, stream contents, hashes or byte counts are copied.
+A completed probe write followed by an empty wrapper read points to a
+result-channel discrepancy; a probe stopped before its write points earlier in
+the probe path; a nonempty read followed by a decode/write failure points to
+normalization. Missing marker evidence remains unknown, not proof that the
+probe did not execute. Milestones are untrusted guest observations, not
+acceptance evidence; normal schema/result checks and resource limits are unchanged.
+
 #### Distinguishing acceptance MCP errors from expected guest failures
 
 The live conformance harness emits `AWF_ENCLAVE_ACCEPTANCE_CHECK` records for

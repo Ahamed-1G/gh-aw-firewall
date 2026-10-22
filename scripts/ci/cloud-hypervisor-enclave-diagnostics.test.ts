@@ -247,6 +247,36 @@ describe('public enclave conformance diagnostic retention', () => {
     }
   });
 
+  it('reprojects probe milestones and actual-read metadata into uploaded invocation records', () => {
+    const context = prepare();
+    const file = invocation();
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.guestSession = projectEnclaveSessionDiagnostics(Buffer.from([
+      ...Array.from({ length: 40 }, () => ({ event: 'progress', stage: 'engine-started' })),
+      { event: 'storage-probe', status: 'captured', milestones: [
+        { stage: 'storage-complete', enospcObserved: true },
+        { stage: 'output-write-complete' },
+      ] },
+      { event: 'output-normalization', inputState: 'empty', stdoutState: 'present' },
+      { event: 'failure', category: 'result-empty' },
+    ].map(event => JSON.stringify(event)).join('\n')));
+    value.guestSession.storageProbe.path = secret;
+    value.guestSession.storageProbe.milestones[0].result = secret;
+    value.guestSession.normalization.stdout = secret;
+    value.guestSession.normalization.byteCount = 999;
+    write(file, value);
+    diagnostics.collect(context, { status: 'failed', stage: 'resource-limit checks' });
+    const retained = JSON.parse(fs.readFileSync(path.join(output, 'upload', 'invocation-1.json'), 'utf8'));
+    expect(retained.guestSession.storageProbe).toEqual({ status: 'captured', milestones: [
+      { stage: 'storage-complete', enospcObserved: true },
+      { stage: 'output-write-complete' },
+    ] });
+    expect(retained.guestSession.normalization).toEqual({ inputState: 'empty', stdoutState: 'present' });
+    expect(retained.guestSession.failure).toEqual({ event: 'failure', category: 'result-empty' });
+    expect(records()).not.toContain(secret);
+    expect(records()).not.toContain('byteCount');
+  });
+
   it('rejects more than 128 projected files without publishing a partial artifact', () => {
     const context = prepare();
     for (let index = 0; index < 64; index++) {

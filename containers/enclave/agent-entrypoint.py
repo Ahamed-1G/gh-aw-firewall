@@ -25,6 +25,7 @@ SESSION_LOG_PATH = Path("/awf/session.jsonl")
 AGENT_DIR = Path("/agent")
 TEMP_DIR = Path("/tmp")
 SHARED_MEMORY_DIR = Path("/dev/shm")
+STORAGE_PROBE_PATH = TEMP_DIR / ".awf-enclave-storage-probe.jsonl"
 COPILOT_BIN = "/usr/local/bin/copilot"
 GITHUB_AGENT_ID_PATH = Path("/run/awf-enclave-github/agent-id")
 GITHUB_BEARER_PATH = Path("/run/awf-enclave-github/bearer")
@@ -36,6 +37,11 @@ MAX_ENGINE_STREAM_BYTES = MAX_TRANSCRIPT_BYTES // 4
 MAX_DIAGNOSTIC_BYTES = 256 * 1024
 MAX_DIAGNOSTIC_FILES = 32
 MAX_RESOURCE_ENTRIES = 10_000
+MAX_STORAGE_PROBE_BYTES = 4096
+STORAGE_PROBE_STAGES = {
+    "started", "storage-complete", "cleanup-started", "cleanup-complete",
+    "output-write-started", "output-write-complete",
+}
 MAX_STARTUP_RETRIES = 2
 STARTUP_CRASH_WINDOW_SECONDS = 30
 EXIT_CONFIGURATION_INVALID = 10
@@ -204,6 +210,44 @@ def summarize_enclave_stream(value: str) -> dict:
 
 def append_progress(stage: str, **metadata) -> None:
     append_event({"event": "progress", "stage": stage, **metadata})
+
+
+def append_storage_probe_snapshot() -> None:
+    event = {"event": "storage-probe", "status": "missing", "milestones": []}
+    try:
+        with open(STORAGE_PROBE_PATH, "rb", opener=lambda name, flags: os.open(
+            name, flags | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )) as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                event["status"] = "unsafe"
+            else:
+                data = handle.read(MAX_STORAGE_PROBE_BYTES + 1)
+                if len(data) > MAX_STORAGE_PROBE_BYTES:
+                    event["status"] = "oversized"
+                else:
+                    lines = data.decode("utf-8").splitlines()
+                    if not lines or len(lines) > 16:
+                        raise ValueError("invalid probe marker")
+                    milestones = []
+                    for line in lines:
+                        value = json.loads(line)
+                        if not isinstance(value, dict) or not isinstance(value.get("stage"), str) \
+                                or value["stage"] not in STORAGE_PROBE_STAGES:
+                            raise ValueError("invalid probe stage")
+                        milestone = {"stage": value["stage"]}
+                        for key in ("enospcObserved", "probeFilesRemoved"):
+                            if key in value:
+                                if not isinstance(value[key], bool):
+                                    raise ValueError("invalid probe flag")
+                                milestone[key] = value[key]
+                        milestones.append(milestone)
+                    event.update({"status": "captured", "milestones": milestones})
+    except OSError as error:
+        event["status"] = "missing" if error.errno == errno.ENOENT else \
+            "unsafe" if error.errno in {errno.ELOOP, errno.EISDIR} else "read-failed"
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        event["status"] = "invalid"
+    append_event(event)
 
 
 def directory_usage(path: Path) -> dict:
@@ -832,6 +876,7 @@ def main() -> int:
         stdout, _ = append_engine_result(completed)
         runtime = time.monotonic() - started
         append_resource_snapshot("after-engine", max_output)
+        append_storage_probe_snapshot()
         append_progress(
             "engine-completed",
             attempt=attempt + 1,
@@ -867,6 +912,12 @@ def main() -> int:
     except OSError:
         append_event({"event": "failure", "category": "result-read-failed"})
         return EXIT_RESULT_READ_FAILED
+    append_event({
+        "event": "output-normalization",
+        "inputState": "empty" if not result_bytes else
+            "oversized" if len(result_bytes) > max_output else "within-limit",
+        "stdoutState": "present" if stdout else "empty",
+    })
     if not result_bytes:
         append_event({"event": "failure", "category": "result-empty"})
         return EXIT_RESULT_EMPTY

@@ -1185,6 +1185,93 @@ describe('Cloud Hypervisor enclave live acceptance harness', () => {
     })).not.toThrow();
   });
 
+  it.each(['success', 'output-failure', 'cleanup-failure', 'diagnostic-failure', 'both-fail'])(
+    'observes the real storage probe boundaries under %s without allocating disk', scenario => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'awf-probe-milestones-'));
+      try {
+        const result = JSON.parse(execFileSync('python3', ['-c', String.raw`
+import builtins, contextlib, errno, io, json, os, sys
+root, scenario = sys.argv[1:]
+source = sys.stdin.read()
+real_open, real_write, real_close = os.open, os.write, os.close
+real_file, real_exists = builtins.open, os.path.exists
+marker = root + "/marker.jsonl"
+output = root + "/out"
+probe_fd = 100000
+def open_fd(name, flags, mode=0o777):
+    if name == "/tmp/.awf-enclave-storage-probe.jsonl":
+        if scenario in ("diagnostic-failure", "both-fail"):
+            raise PermissionError(errno.EACCES, "PRIVATE_DIAGNOSTIC_ERROR")
+        return real_open(marker, flags, mode)
+    if name.startswith("/output/.awf-live-enospc-"):
+        return probe_fd
+    raise AssertionError("unexpected file")
+def write_fd(fd, data):
+    if fd == probe_fd:
+        raise OSError(errno.EIO if scenario == "both-fail" else errno.ENOSPC, "PRIVATE_PROBE_ERROR")
+    return real_write(fd, data)
+def unlink(name):
+    if scenario == "cleanup-failure":
+        raise PermissionError(errno.EACCES, "PRIVATE_CLEANUP_ERROR")
+def open_file(name, *args, **kwargs):
+    if name != "/output/out":
+        raise AssertionError("unexpected output")
+    if scenario == "output-failure":
+        raise OSError(errno.EIO, "PRIVATE_OUTPUT_ERROR")
+    return real_file(output, *args, **kwargs)
+os.open, os.write = open_fd, write_fd
+os.close = lambda fd: None if fd == probe_fd else real_close(fd)
+os.unlink = unlink
+os.path.exists = lambda name: False if name.startswith("/output/.awf-live-enospc-") else real_exists(name)
+builtins.open = open_file
+captured, errors, failure = io.StringIO(), io.StringIO(), None
+with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(errors):
+    try:
+        exec(compile(source, "<reviewed-storage-probe>", "exec"), {})
+    except OSError as error:
+        failure = error.errno
+milestones = []
+if real_exists(marker):
+    with real_file(marker, encoding="ascii") as handle:
+        milestones = [json.loads(line) for line in handle]
+value = None
+if real_exists(output):
+    with real_file(output, encoding="utf8") as handle:
+        value = json.load(handle)
+print(json.dumps({"milestones": milestones, "output": value, "failure": failure, "errors": errors.getvalue()}))
+`, directory, scenario], {
+          input: harness.buildEnospcProbeScript(512), encoding: 'utf8',
+        }));
+        if (scenario === 'success' || scenario === 'diagnostic-failure') {
+          expect(result.failure).toBeNull();
+          expect(result.output).toEqual({ enospcObserved: true, probeFilesRemoved: true });
+        } else {
+          expect(result.failure).toBe(scenario === 'cleanup-failure' ? 13 : 5);
+          expect(result.output).toBeNull();
+        }
+        const stages = result.milestones.map((item: { stage: string }) => item.stage);
+        if (scenario === 'success') {
+          expect(stages).toEqual([
+            'started', 'storage-complete', 'cleanup-started', 'cleanup-complete',
+            'output-write-started', 'output-write-complete',
+          ]);
+          expect(result.milestones[1].enospcObserved).toBe(true);
+          expect(result.milestones[3].probeFilesRemoved).toBe(true);
+        } else if (scenario === 'output-failure') {
+          expect(stages[stages.length - 1]).toBe('output-write-started');
+        } else if (scenario === 'cleanup-failure') {
+          expect(stages[stages.length - 1]).toBe('cleanup-started');
+        } else {
+          expect(stages).toEqual([]);
+          expect(result.errors).toContain('AWF_ENCLAVE_PROBE_DIAGNOSTIC write-failed');
+        }
+        expect(result.errors).not.toContain('PRIVATE_');
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('uses the production finite-schema grammar for every live response contract', () => {
     const scriptProbe = harness.buildScriptGuestProbe();
     const agentProbe = harness.buildAgentGuestProbe();

@@ -135,6 +135,8 @@ function projectInvocation(value) {
     if (session.failure) events.push(session.failure);
     if (Array.isArray(session.operationErrors)) events.push(...session.operationErrors.slice(-16));
     if (session.output) events.push({ ...session.output, event: 'output-snapshot' });
+    if (session.storageProbe) events.push({ ...session.storageProbe, event: 'storage-probe' });
+    if (session.normalization) events.push({ ...session.normalization, event: 'output-normalization' });
     if (session.resources) {
       events.push({
         ...session.resources, event: 'resource-snapshot',

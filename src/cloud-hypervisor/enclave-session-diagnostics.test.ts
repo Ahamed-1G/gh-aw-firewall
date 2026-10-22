@@ -121,6 +121,59 @@ describe('bounded guest session evidence', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVATE_');
   });
 
+  it('retains bounded probe and actual-read observations beyond the event cap without guest text', async () => {
+    await write([
+      ...Array.from({ length: 40 }, () => ({ event: 'progress', stage: 'engine-started' })),
+      { event: 'storage-probe', status: 'captured', path: 'PRIVATE_PATH', milestones: [
+        { stage: 'started', text: 'PRIVATE_PROBE' },
+        { stage: 'storage-complete', enospcObserved: true, result: 'PRIVATE_RESULT' },
+        { stage: 'cleanup-complete', probeFilesRemoved: true },
+        { stage: 'output-write-complete' },
+      ] },
+      { event: 'output-normalization', inputState: 'empty', stdoutState: 'present',
+        stdout: 'PRIVATE_STDOUT', hash: 'PRIVATE_HASH', bytes: 123 },
+      { event: 'failure', category: 'result-empty' },
+    ]);
+    const result = await read();
+    expect(result.events).toHaveLength(32);
+    expect(result.storageProbe).toEqual({ status: 'captured', milestones: [
+      { stage: 'started' },
+      { stage: 'storage-complete', enospcObserved: true },
+      { stage: 'cleanup-complete', probeFilesRemoved: true },
+      { stage: 'output-write-complete' },
+    ] });
+    expect(result.normalization).toEqual({ inputState: 'empty', stdoutState: 'present' });
+    expect(result.failure).toEqual({ event: 'failure', category: 'result-empty' });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(8192);
+  });
+
+  it.each([
+    [{ stage: 'PRIVATE_STAGE' }],
+    [{ stage: 'started', enospcObserved: 'PRIVATE_FLAG' }],
+    Array.from({ length: 17 }, () => ({ stage: 'started' })),
+    [],
+  ].map(milestones => [milestones]))('rejects invalid or excessive marker observations', async milestones => {
+    await write([{ event: 'storage-probe', status: 'captured', milestones }]);
+    const result = await read();
+    expect(result.storageProbe).toEqual({ status: 'invalid', milestones: [] });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+  });
+
+  it('drops unrecognized marker/read states and does not turn unavailable evidence into progress', async () => {
+    await write([
+      { event: 'storage-probe', status: 'PRIVATE_STATUS', milestones: [{ stage: 'started' }] },
+      { event: 'output-normalization', inputState: 'PRIVATE_STATE', stdoutState: 'present' },
+      { event: 'output-normalization', inputState: 'empty', stdoutState: 'PRIVATE_STDOUT' },
+    ]);
+    const result = await read();
+    expect(result.storageProbe).toBeUndefined();
+    expect(result.normalization).toBeUndefined();
+    expect(result.rejected).toBe(3);
+    await write([{ event: 'storage-probe', status: 'missing', milestones: [{ stage: 'output-write-complete' }] }]);
+    expect((await read()).storageProbe).toEqual({ status: 'missing', milestones: [] });
+  });
+
   it('hands stopped public-session text only to the protected sink, not the audit projection', async () => {
     await write([
       { event: 'engine-result', exitCode: 1, stderr: { raw: 'PUBLIC_ENGINE_FAILURE' } },
