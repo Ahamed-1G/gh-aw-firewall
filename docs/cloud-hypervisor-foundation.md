@@ -1568,6 +1568,13 @@ later cleanup/history entries and independent upload reprojection. These
 diagnostics preserve the existing profile, result, cleanup and redaction
 requirements rather than treating an opaque profile failure as success.
 
+Container-log capture follows the enabled profile. All profiles require the
+gateway, enclave MCP server, general API proxy and Squid logs; combined and
+agent-only profiles also require the dedicated enclave-agent API proxy logs.
+Script-only runs omit only that disabled service. Missing required containers
+and capture failures remain fatal, and both stdout and stderr from every
+required container remain subject to the output-redaction scan.
+
 Resource discovery reports raw-entry, regular-file, resource-suffix and valid-name
 count buckets before applying the new-record, owner and readiness filters.
 Missing or unreadable directories are explicit inventory failures, never empty

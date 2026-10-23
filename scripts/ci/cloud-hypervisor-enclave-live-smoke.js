@@ -245,12 +245,12 @@ function run(command, args, options = {}) {
   return captureStderr ? `${result.stdout}\n${result.stderr}` : result.stdout;
 }
 
-function captureContainerLogs() {
+function captureContainerLogs(profile = 'combined') {
   return [
     GATEWAY_CONTAINER,
     'awf-enclave-mcp-server',
     'awf-api-proxy',
-    'awf-enclave-agent-api-proxy',
+    ...(profile === 'script-only' ? [] : ['awf-enclave-agent-api-proxy']),
     'awf-squid',
   ].map((container) => run('docker', ['logs', container], {
     maxBuffer: 1024 * 1024,
@@ -2675,7 +2675,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       const profileStderr = await acceptanceCheck(failureContext, profile, 'stderr-read',
         () => fs.readFileSync(awfErr, 'utf8'));
       const profileContainerLogs = await acceptanceCheck(failureContext, profile, 'container-logs',
-        () => captureContainerLogs());
+        () => captureContainerLogs(profile));
       await acceptanceCheck(failureContext, profile, 'output-redaction', () => {
         const privateRoot = path.join(
           '/var/tmp',
@@ -2865,6 +2865,7 @@ module.exports = {
   toAwfConfig,
   assertProfileTools,
   assertProfileInitialize,
+  captureContainerLogs,
   assertNoSentinelLeak,
   assertExpectedToolResult,
   assertRecoveredInvocation,

@@ -89,6 +89,7 @@ const harness = require(harnessPath) as {
   assertUnifiedProfiles(artifacts: unknown, primary: unknown, enclave: unknown, sbom: unknown): void;
   assertProfileTools(response: unknown, profile: string, requestId?: number): Record<string, boolean>;
   assertProfileInitialize(response: unknown, requestId: number): Record<string, boolean>;
+  captureContainerLogs(profile?: string): string[];
   assertNoSentinelLeak(directories: string[], logs: string[], sentinel: string): void;
   assertExpectedToolResult(response: unknown, requestId: number, expected: unknown, label: string): void;
   assertNoSuccessfulResult(response: unknown): void;
@@ -2030,6 +2031,79 @@ describe('bounded MCP acceptance check diagnostics', () => {
   });
 });
 
+describe('profile-aware required container log capture', () => {
+  const profiles = ['combined', 'script-only', 'agent-only'];
+  const agentProxy = 'awf-enclave-agent-api-proxy';
+  const containers = (profile: string) => [
+    'awmg-mcpg', 'awf-enclave-mcp-server', 'awf-api-proxy',
+    ...(profile === 'script-only' ? [] : [agentProxy]), 'awf-squid',
+  ];
+  const required = profiles.flatMap(profile => containers(profile).map(container => [profile, container]));
+  type CommandResult = { status: number | null; stdout: string; stderr: string; error?: Error };
+  let inspect: jest.Mock<CommandResult, [string, string[]]>;
+  let isolatedHarness: typeof harness;
+
+  beforeEach(() => {
+    inspect = jest.fn((_command: string, args: string[]) => ({
+      status: 0, stdout: `stdout:${args[1]}`, stderr: `stderr:${args[1]}`,
+    }));
+    jest.doMock('child_process', () => ({
+      ...jest.requireActual('child_process'), spawnSync: inspect,
+    }));
+    jest.isolateModules(() => { isolatedHarness = require(harnessPath); });
+  });
+  afterEach(() => jest.dontMock('child_process'));
+
+  it.each([undefined, ...profiles])('requires the exact container set and both streams for %s', profile => {
+    inspect.mockImplementation((_command, args) => ({
+      status: profile === 'script-only' && args[1] === agentProxy ? 1 : 0,
+      stdout: `stdout:${args[1]}`, stderr: `stderr:${args[1]}`,
+    }));
+    const expected = containers(profile ?? 'combined');
+    expect(isolatedHarness.captureContainerLogs(profile))
+      .toEqual(expected.map(container => `stdout:${container}\nstderr:${container}`));
+    expect(inspect.mock.calls).toEqual(expected.map(container => [
+      'docker', ['logs', container], { encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    ]));
+  });
+
+  it.each(required)('fails closed when required %s container %s logs fail', (profile, missing) => {
+    inspect.mockImplementation((_command, args) => ({
+      status: args[1] === missing ? 1 : 0, stdout: '', stderr: 'private docker error',
+    }));
+    expect(() => isolatedHarness.captureContainerLogs(profile))
+      .toThrow('Required live enclave command failed: docker');
+  });
+
+  it.each(profiles.flatMap(profile => ['spawn', 'signal', 'buffer'].map(failure => [profile, failure])))(
+    'preserves %s log-capture %s failures', (profile, failure) => {
+      inspect.mockReturnValue({
+        status: null, stdout: 'partial stdout', stderr: 'partial stderr',
+        ...(failure === 'signal' ? {} : {
+          error: Object.assign(new Error('private spawn error'), {
+            code: failure === 'buffer' ? 'ENOBUFS' : 'ENOENT',
+          }),
+        }),
+      });
+      expect(() => isolatedHarness.captureContainerLogs(profile))
+        .toThrow('Required live enclave command failed: docker');
+    },
+  );
+
+  it.each(required.flatMap(([profile, container]) => ['stdout', 'stderr'].map(stream => [profile, container, stream])))(
+    'rejects sentinel leaks in %s container %s %s', (profile, container, stream) => {
+      const sentinel = 'AWF_ENCLAVE_LIVE_OUTPUT_SENTINEL_synthetic';
+      inspect.mockImplementation((_command, args) => ({
+        status: 0,
+        stdout: args[1] === container && stream === 'stdout' ? sentinel : 'safe stdout',
+        stderr: args[1] === container && stream === 'stderr' ? sentinel : 'safe stderr',
+      }));
+      const logs = isolatedHarness.captureContainerLogs(profile);
+      expect(() => isolatedHarness.assertNoSentinelLeak([], logs, sentinel)).toThrow(/captured log/);
+    },
+  );
+});
+
 describe('single-executor profile acceptance diagnostics', () => {
   const sentinel = 'PRIVATE_PROFILE_PAYLOAD_/private/path';
   const phases = [
@@ -2055,6 +2129,9 @@ describe('single-executor profile acceptance diagnostics', () => {
     expect(block.indexOf("'tools-validation'")).toBeGreaterThan(block.indexOf("'tools-list'"));
     expect(block.indexOf("'result-validation'")).toBeGreaterThan(block.indexOf("'request'"));
     expect(block.indexOf("'output-redaction'")).toBeGreaterThan(block.indexOf("'cleanup'"));
+    expect(block).toContain('() => captureContainerLogs(profile)');
+    expect(block.indexOf("'output-redaction'")).toBeGreaterThan(block.indexOf("'container-logs'"));
+    expect(block).toContain('[profileStdout, profileStderr, ...profileContainerLogs]');
   });
 
   it.each(['script-only', 'agent-only'].flatMap(profile => phases.map(phase => [profile, phase])))(
