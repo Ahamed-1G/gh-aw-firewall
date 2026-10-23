@@ -641,9 +641,20 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(compiledWritablePaths()).not.toContain('/run/awf-config-audit');
   });
 
-  it('records official compiler provenance without enabling issue writes', () => {
+  it('retains official compiler provenance and version enforcement without issue writes', () => {
     expect(lock.split('\n', 1)[0]).toContain(`"compiler_version":"${compilerVersion}"`);
     expect(lock).not.toContain('GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE: "true"');
+    const compiled = yaml.load(lock) as {
+      jobs: Record<string, {
+        steps: Array<{ name: string; env?: Record<string, string>;
+          with?: Record<string, string> }>;
+      }>;
+    };
+    const check = compiled.jobs.activation.steps.find(step =>
+      step.name === 'Check compile-agentic version');
+    expect(check?.env?.GH_AW_COMPILED_VERSION).toBe(compilerVersion);
+    expect(check?.env?.GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE).toBe('false');
+    expect(check?.with?.script).toContain("require(path.join(actionsDir, 'check_version_updates.cjs'))");
   });
 
   it('sets up release-matched primary and script-role artifacts', () => {
