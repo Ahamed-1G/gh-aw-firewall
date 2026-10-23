@@ -123,6 +123,33 @@ describe('public enclave conformance diagnostic retention', () => {
     });
   });
 
+  it('retains finite refreshed-baseline checks through upload without exposing the resource record', () => {
+    const context = prepare();
+    diagnostics.collect(context, { status: 'failed', check: {
+      step: 'crash-recovery', phase: 'resource-refresh', status: 'failed', reason: 'crash-baseline-invalid',
+      baseline: {
+        uniqueRecord: true, pending: true, ownerMatches: false, identityMatches: true,
+        mountsRetained: true, mountsCommitted: true, snapshotMounted: false,
+        ownerPid: 23456, mountPoint: secret, [secret]: true,
+      },
+      record: { owner: secret, storage: secret },
+    } });
+    const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+    expect(summary.check).toEqual({
+      step: 'crash-recovery', phase: 'resource-refresh', status: 'failed', reason: 'crash-baseline-invalid',
+      baseline: {
+        uniqueRecord: true, pending: true, ownerMatches: false, identityMatches: true,
+        mountsRetained: true, mountsCommitted: true, snapshotMounted: false,
+      },
+    });
+    expect(diagnostics.projectAcceptanceCheck(summary.check)).toEqual(summary.check);
+    expect(diagnostics.projectAcceptanceCheck({
+      step: 'crash-recovery', phase: 'resource-refresh', status: 'passed',
+      baseline: { mountsRetained: secret, pending: 1, [secret]: true },
+    })).toEqual({ step: 'crash-recovery', phase: 'resource-refresh', status: 'passed', baseline: {} });
+    expect(records()).not.toMatch(/PRIVATE_TOKEN|23456/);
+  });
+
   it('retains only finite publication and discovery facts across upload reprojection', () => {
     const context = prepare();
     const file = invocation('script');

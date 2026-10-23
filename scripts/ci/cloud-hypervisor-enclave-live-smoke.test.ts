@@ -102,6 +102,9 @@ const harness = require(harnessPath) as {
   readRecoveredInvocation(directory: string, file: string): {
     after: Record<string, unknown>; records: Array<{ file: string; record: Record<string, unknown> }>;
   };
+  readCrashRecoveryBaseline<T extends { runId: string; invocationId: string }>(
+    directory: string, active: { file: string; record: T }, ownerPid: number,
+  ): { record: T; inventory: Record<string, unknown>; baseline: Record<string, boolean> };
   assertNoVmResidue(expectedPrimary?: {
     namespaces: string[];
     processes: Array<{ pid: string; startTime: string }>;
@@ -2029,7 +2032,7 @@ describe('bounded MCP acceptance check diagnostics', () => {
 describe('guarded crash-recovery diagnostics', () => {
   const sentinel = 'PRIVATE_CRASH_RECOVERY_PAYLOAD_/private/path';
   const phases = [
-    'resource-baseline', 'request-start', 'resource-discovery', 'marker-wait', 'vmm-discovery',
+    'resource-baseline', 'request-start', 'resource-discovery', 'marker-wait', 'resource-refresh', 'vmm-discovery',
     'vmm-kill', 'host-kill', 'stdout-read', 'stderr-read', 'container-logs', 'compose-stop',
     'recovery-config', 'recovery-launch', 'broker-readiness', 'gateway-readiness',
     'primary-readiness', 'tools-list', 'resource-read', 'recovery-validation', 'interrupted-response', 'cleanup',
@@ -2037,6 +2040,7 @@ describe('guarded crash-recovery diagnostics', () => {
   function crashRecord() {
     return {
       runId: 'a'.repeat(32), invocationId: 'b'.repeat(24), state: 'cleaned',
+      owner: { pid: process.pid, startTime: '12345' }, mountPending: false, snapshotPending: false,
       directory: sentinel, directoryIdentity: { device: 1, inode: 2 },
       ancestors: [{ path: sentinel, identity: { device: 1, inode: 3 } }],
       mount: { mountId: 1, device: 2 },
@@ -2045,7 +2049,7 @@ describe('guarded crash-recovery diagnostics', () => {
         directory: sentinel, parentIdentity: { device: 1, inode: 5 },
         ancestors: [{ path: sentinel, identity: { device: 1, inode: 1 } }],
         directoryIdentity: { device: 4, inode: 5 }, mountedIdentity: { device: 4, inode: 6 },
-        mounts: [{ mountId: 7, device: 8 }],
+        mounts: [{ mountId: 7, device: 8, mountPoint: sentinel }],
       },
     };
   }
@@ -2054,6 +2058,85 @@ describe('guarded crash-recovery diagnostics', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
   });
   afterEach(() => jest.restoreAllMocks());
+
+  it('refreshes the complete journal only after the guest marker and before killing the VMM', () => {
+    const source = fs.readFileSync(harnessPath, 'utf8');
+    const crash = source.slice(source.indexOf('const crashProbe ='), source.indexOf(
+      'failureContext.stage = FAILURE_STAGES.OUTPUT_REDACTION;',
+    ));
+    const marker = crash.indexOf("'marker-wait'");
+    const refresh = crash.indexOf("'resource-refresh'");
+    const kill = crash.indexOf("'vmm-kill'");
+    expect(marker).toBeGreaterThan(0);
+    expect(refresh).toBeGreaterThan(marker);
+    expect(kill).toBeGreaterThan(refresh);
+    expect(crash).toContain('readCrashRecoveryBaseline(journalRoot, active, awf.pid)');
+    expect(crash).toContain('assertRecoveredInvocation(crashBaseline.record, recovered.after, recovered.records)');
+    expect(crash).not.toContain('assertRecoveredInvocation(active.record,');
+  });
+
+  it.each(['unchanged', 'appended'])('uses the protected post-marker baseline with %s mounts', async kind => {
+    const directory = fs.mkdtempSync(path.join(root, '.crash-baseline-'));
+    const before = { ...crashRecord(), state: 'pending' };
+    if (kind === 'appended') before.storage.mounts = [];
+    const current = { ...crashRecord(), state: 'pending' };
+    const file = path.join(directory, `${current.runId}-${current.invocationId}.resources.json`);
+    const context: { check?: Record<string, unknown> } = {};
+    try {
+      fs.writeFileSync(file, JSON.stringify(current), { mode: 0o600 });
+      const refreshed = await harness.acceptanceCheck(context, 'crash-recovery', 'resource-refresh',
+        () => harness.readCrashRecoveryBaseline(directory, { file, record: before }, process.pid));
+      expect(refreshed.record).toEqual(current);
+      expect(Object.values(refreshed.baseline)).toEqual(Array(7).fill(true));
+      expect(context.check).toMatchObject({ status: 'passed', baseline: refreshed.baseline,
+        inventory: { operation: 'complete' } });
+      const cleaned = { ...current, state: 'cleaned' };
+      expect(() => harness.assertRecoveredInvocation(refreshed.record, cleaned, [{ record: cleaned }])).not.toThrow();
+      if (kind === 'appended') {
+        expect(() => harness.assertRecoveredInvocation(before, cleaned, [{ record: cleaned }])).toThrow();
+      }
+      expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['owner', 'owner-identity', 'directory', 'snapshot', 'removed-mount', 'changed-mount',
+    'pending-storage', 'pending-snapshot', 'pending-invocation', 'missing-snapshot-mount', 'cleaned'])(
+    'rejects an unsafe post-marker baseline: %s', async kind => {
+      const directory = fs.mkdtempSync(path.join(root, '.crash-baseline-'));
+      const before = { ...crashRecord(), state: 'pending' };
+      const current = { ...crashRecord(), state: 'pending' };
+      const file = path.join(directory, `${current.runId}-${current.invocationId}.resources.json`);
+      const context: { check?: Record<string, unknown> } = {};
+      if (kind === 'owner') current.owner.pid += 1;
+      if (kind === 'owner-identity') current.owner.startTime = 'changed';
+      if (kind === 'directory') current.directoryIdentity.inode += 1;
+      if (kind === 'snapshot') current.snapshot.identity.inode += 1;
+      if (kind === 'removed-mount') current.storage.mounts = [];
+      if (kind === 'changed-mount') current.storage.mounts[0].mountId += 1;
+      if (kind === 'pending-storage') Object.assign(current.storage, { pending: sentinel });
+      if (kind === 'pending-snapshot') current.snapshotPending = true;
+      if (kind === 'pending-invocation') current.mountPending = true;
+      if (kind === 'missing-snapshot-mount') {
+        before.storage.mounts = [];
+        current.storage.mounts = [];
+      }
+      if (kind === 'cleaned') current.state = 'cleaned';
+      try {
+        fs.writeFileSync(file, JSON.stringify(current), { mode: 0o600 });
+        await expect(harness.acceptanceCheck(context, 'crash-recovery', 'resource-refresh',
+          () => harness.readCrashRecoveryBaseline(directory, { file, record: before }, process.pid))).rejects.toThrow();
+        expect(context.check).toMatchObject({
+          status: 'failed', reason: 'crash-baseline-invalid', inventory: { operation: 'complete' },
+        });
+        expect(Object.values(context.check?.baseline || {}).some(value => value === false)).toBe(true);
+        expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(phases)('retains the exact failed %s phase and errno through independent cleanup', async phase => {
     const source = fs.readFileSync(harnessPath, 'utf8');

@@ -22,7 +22,7 @@ const MAX_RECORDS = 128;
 const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation',
   'agent-enospc', 'script-enospc', 'guest-oom', 'crash-recovery'];
 const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-baseline', 'resource-discovery',
-  'marker-wait', 'disconnect-validation', 'execution-validation',
+  'marker-wait', 'resource-refresh', 'disconnect-validation', 'execution-validation',
   'request-start', 'vmm-discovery', 'vmm-kill', 'host-kill',
   'stdout-read', 'stderr-read', 'container-logs', 'compose-stop', 'recovery-config', 'recovery-launch',
   'broker-readiness', 'gateway-readiness', 'primary-readiness', 'tools-list', 'resource-read',
@@ -35,7 +35,8 @@ const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version'
   'resource-discovery-timeout', 'resource-inventory-failed', 'invocation-evidence-invalid',
   'invocation-evidence-timeout', 'invocation-outcome-mismatch', 'admission-evidence-failed',
   'vmm-not-found', 'host-already-exited', 'host-kill-failed', 'host-exit-timeout',
-  'recovery-tools-invalid', 'recovery-record-missing', 'recovery-validation-failed', 'interrupted-success'];
+  'recovery-tools-invalid', 'recovery-record-missing', 'recovery-validation-failed', 'interrupted-success',
+  'crash-baseline-invalid'];
 const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'resultPresent',
   'toolIsError', 'structuredPresent', 'contentMatches'];
 const RESOURCE_FLAGS = ['newRecords', 'pending', 'ownerMatches', 'directoryReady',
@@ -50,6 +51,8 @@ const RECOVERY_FLAGS = ['uniqueRecord', 'cleaned', 'runMatches', 'invocationMatc
   'storageDirectoryMatches', 'storageParentIdentityMatches', 'storageAncestorsMatch',
   'storageDirectoryIdentityMatches', 'storageMountedIdentityMatches', 'storageMountsMatch'];
 const RECOVERY_CODES = [...RESOURCE_CODES, 'ESRCH', 'EBUSY', 'ETIMEDOUT', 'ENOSPC'];
+const BASELINE_FLAGS = ['uniqueRecord', 'pending', 'ownerMatches', 'identityMatches',
+  'mountsRetained', 'mountsCommitted', 'snapshotMounted'];
 
 function projectResourceInventory(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -210,6 +213,12 @@ function projectAcceptanceCheck(value) {
       result.recovery = {};
       for (const key of RECOVERY_FLAGS) {
         if (typeof value.recovery[key] === 'boolean') result.recovery[key] = value.recovery[key];
+      }
+    }
+    if (value.baseline && typeof value.baseline === 'object') {
+      result.baseline = {};
+      for (const key of BASELINE_FLAGS) {
+        if (typeof value.baseline[key] === 'boolean') result.baseline[key] = value.baseline[key];
       }
     }
   }

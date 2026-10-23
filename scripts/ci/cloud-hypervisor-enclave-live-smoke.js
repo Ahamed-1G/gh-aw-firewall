@@ -104,7 +104,8 @@ async function acceptanceCheck(context, step, phase, action) {
     const requestId = { 'agent-enospc': 6, 'script-enospc': 7, 'guest-oom': 8,
       'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11 }[step];
     record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId)
-      : ['resource-discovery', 'resource-read'].includes(phase) ? { inventory: result?.inventory }
+      : phase === 'resource-refresh' ? { inventory: result?.inventory, baseline: result?.baseline }
+        : ['resource-discovery', 'resource-read'].includes(phase) ? { inventory: result?.inventory }
         : step === 'crash-recovery' && phase === 'recovery-validation' ? { recovery: result }
           : step === 'crash-recovery' && phase === 'tools-list' ? mcpResponseMetadata(result, 13)
             : step === 'crash-recovery' && phase === 'interrupted-response' ? {
@@ -1449,6 +1450,37 @@ function readRecoveredInvocation(directory, file) {
   return { after: match.record, records, inventory };
 }
 
+function readCrashRecoveryBaseline(directory, active, ownerPid) {
+  const { after, records, inventory } = readRecoveredInvocation(directory, active.file);
+  const stableIdentity = record => {
+    const identity = { ...record, storage: { ...record.storage } };
+    delete identity.storage.mounts;
+    delete identity.storage.pending;
+    return identity;
+  };
+  const beforeMounts = active.record.storage?.mounts;
+  const mounts = after.storage?.mounts;
+  const baseline = {
+    uniqueRecord: records.filter(({ record }) =>
+      record.runId === active.record.runId && record.invocationId === active.record.invocationId).length === 1,
+    pending: after.state === 'pending',
+    ownerMatches: Number.isSafeInteger(ownerPid) && ownerPid > 0 && after.owner?.pid === ownerPid,
+    identityMatches: isDeepStrictEqual(stableIdentity(after), stableIdentity(active.record)),
+    mountsRetained: Array.isArray(beforeMounts) && Array.isArray(mounts)
+      && beforeMounts.every((mount, index) => isDeepStrictEqual(mounts[index], mount)),
+    mountsCommitted: after.storage?.pending === undefined
+      && after.mountPending === false && after.snapshotPending === false,
+    snapshotMounted: typeof after.snapshot?.path === 'string' && Array.isArray(mounts)
+      && mounts.filter(mount => mount?.mountPoint === after.snapshot.path).length === 1,
+  };
+  if (Object.values(baseline).some(value => !value)) {
+    const error = mcpFailure('crash-baseline-invalid');
+    Object.assign(mcpFailures.get(error), { inventory, baseline });
+    throw error;
+  }
+  return { record: after, inventory, baseline };
+}
+
 function resourceDiscoveryEvidence(directory, ownerPid, inventory) {
   const result = { ...inventory };
   let ownNamespace;
@@ -2438,8 +2470,10 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
         () => waitForInvocationRecord(journalRoot, existingResources, awf.pid, 90_000));
       await acceptanceCheck(failureContext, 'crash-recovery', 'marker-wait',
         () => waitForPath(path.join(active.record.directory, 'output', 'crash-probe-started'), 90_000));
+      const crashBaseline = await acceptanceCheck(failureContext, 'crash-recovery', 'resource-refresh',
+        () => readCrashRecoveryBaseline(journalRoot, active, awf.pid));
       const vmmPid = await acceptanceCheck(failureContext, 'crash-recovery', 'vmm-discovery', () => {
-        const apiSocket = path.join(active.record.storage.directory, 'runs', 'vm', 'api.socket');
+        const apiSocket = path.join(crashBaseline.record.storage.directory, 'runs', 'vm', 'api.socket');
         const pid = findProcessForSocket(apiSocket);
         if (!pid) throw mcpFailure('vmm-not-found');
         return pid;
@@ -2491,7 +2525,7 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
       const recovered = await acceptanceCheck(failureContext, 'crash-recovery', 'resource-read',
         () => readRecoveredInvocation(journalRoot, active.file));
       await acceptanceCheck(failureContext, 'crash-recovery', 'recovery-validation',
-        () => assertRecoveredInvocation(active.record, recovered.after, recovered.records));
+        () => assertRecoveredInvocation(crashBaseline.record, recovered.after, recovered.records));
       await acceptanceCheck(failureContext, 'crash-recovery', 'interrupted-response', async () => {
         const result = await crashResponse;
         assertNoSuccessfulResult(result.response);
@@ -2797,6 +2831,7 @@ module.exports = {
   observeInvocationRecords,
   resourceRecords,
   readRecoveredInvocation,
+  readCrashRecoveryBaseline,
   resourceDiscoveryEvidence,
   waitForInvocationRecord,
   waitForInvocationOutcome,

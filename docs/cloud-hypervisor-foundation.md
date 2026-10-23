@@ -1529,7 +1529,16 @@ tool-list, journal-read, identity-validation, interrupted-response and cleanup
 operation. Recovery journal reads use the protected, no-symlink, size-bounded
 resource inventory reader. Identity validation reports individual boolean
 comparisons, including cleaned state and retained directory, mount, snapshot
-and storage identities, without exposing their values. A host exit listener is
+and storage identities, without exposing their values. Discovery can observe
+the snapshot identity before its bind mount is committed. After the guest-start
+marker and before killing the VMM, the harness refreshes the same protected
+resource record. It requires the same pending invocation and owner identity,
+unchanged non-mount metadata, retention of every previously recorded mount, no
+pending mount or snapshot intent, and a committed snapshot mount. Recovery must
+then retain the complete refreshed mount list exactly; an early, incomplete
+discovery list is not the recovery baseline. The refresh emits only finite
+validation booleans and inventory facts, never the resource record itself.
+A host exit listener is
 registered before `SIGKILL`; kill failures and exit deadlines remove their timers
 and listeners and report finite reasons. Graceful shutdown also contains signal
 exceptions and child error events inside its awaited operation. A signal-delivery
