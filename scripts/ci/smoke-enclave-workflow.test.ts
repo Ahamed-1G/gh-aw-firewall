@@ -21,9 +21,9 @@ function countOccurrences(content: string, value: string): number {
 
 describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
   const compilerVersion =
-    'v0.93.0';
+    'v0.93.2';
   const setupAction =
-    'github/gh-aw-actions/setup@e7519e6442ef74dda80a1627315ad827f402309c';
+    'github/gh-aw-actions/setup@d9128eb3ea40c18b77c76184eda03c0ff2608d79';
   const source = fs.readFileSync(
     path.join(workflowsDir, 'smoke-enclave-cloud-hypervisor.md'), 'utf8'
   );
@@ -583,7 +583,7 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(countOccurrences(lock, '- name: Start MCP Gateway')).toBe(1);
     expect(lock).toContain('ghcr.io/github/gh-aw-mcpg:');
     expect(lock).toContain(
-      'ghcr.io/github/gh-aw-mcpg:v0.4.36@sha256:b4d2856018959c798b3e3f81ae4ab5b275e06354e123e1f7971de931f2f450f2'
+      'ghcr.io/github/gh-aw-mcpg:v0.4.37@sha256:9c7f242f6dec2d7d7b55d4c9e07872d59b85377c6cb3de46c915a5d1ffb91442'
     );
     expect(lock).toContain('"awf-enclave": {\n                "required": false,');
     expect(lock).toContain('GH_AW_MCP_DEFERRED_SERVERS="awf-enclave"');
@@ -611,7 +611,7 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(source).toContain('consumes the host-only `AWF_RESOLVED_CONFIG` path');
     expect(source).toContain('successful privileged cleanup');
     expect(source).toContain('Do not copy raw\nresolved JSON into normal artifact paths');
-    expect(source).toContain('official gh-aw v0.93.0 prerelease');
+    expect(source).toContain('official gh-aw v0.93.2 release');
     expect(source).toContain(compilerVersion);
     expect(steps.some(step =>
       step.uses === setupAction
@@ -641,18 +641,9 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     expect(compiledWritablePaths()).not.toContain('/run/awf-config-audit');
   });
 
-  it('retains official release revocation and minimum-version enforcement without issue writes', () => {
-    const compiled = yaml.load(lock) as {
-      jobs: Record<string, {
-        steps: Array<{ name: string; env?: Record<string, string>;
-          with?: Record<string, string> }>;
-      }>;
-    };
-    const check = compiled.jobs.activation.steps.find(step =>
-      step.name === 'Check compile-agentic version');
-    expect(check?.env?.GH_AW_COMPILED_VERSION).toBe(compilerVersion);
-    expect(check?.env?.GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE).toBe('false');
-    expect(check?.with?.script).toContain("require(path.join(actionsDir, 'check_version_updates.cjs'))");
+  it('records official compiler provenance without enabling issue writes', () => {
+    expect(lock.split('\n', 1)[0]).toContain(`"compiler_version":"${compilerVersion}"`);
+    expect(lock).not.toContain('GH_AW_BLOCKED_VERSION_REPORT_AS_ISSUE: "true"');
   });
 
   it('sets up release-matched primary and script-role artifacts', () => {
@@ -942,7 +933,7 @@ describe('smoke enclave build workflow', () => {
   });
 
   it('uses the compatible gateway and local AWF build', () => {
-    expect(lock).toContain('ghcr.io/github/gh-aw-mcpg:v0.4.36');
+    expect(lock).toContain('ghcr.io/github/gh-aw-mcpg:v0.4.37');
     expect(lock).toContain('"awf-enclave": {\n                "required": false,');
     expect(lock).toContain('Install local AWF binary');
     expect(lock).toContain('--build-local');
