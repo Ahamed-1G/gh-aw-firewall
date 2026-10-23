@@ -1883,7 +1883,7 @@ function makeConfig(artifacts, workDir, workspace, handoff, profile = 'combined'
           maxTaskBytes: 4096,
         },
         runtime: 'cloud-hypervisor',
-        timeout: 180,
+        timeout: 360,
         maxInvocations: 3,
         repos: [enclaveRepository],
       },

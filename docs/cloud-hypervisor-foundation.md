@@ -1752,9 +1752,10 @@ former one-request/256-token allowance could reject Copilot's serialized request
 locally before any upstream inference. Admission requires both limits to remain
 omitted for these exact profiles; it does not admit arbitrary cost-limit values.
 Provider API calls do not debit the separate enclave-to-primary information
-ledger. Finite response schemas, per-repository disclosure accounting, the
-180-second agent timeout, three-invocation cap, task/output bounds, isolation,
-and proxy credential custody remain unchanged. Production API-proxy model-cost
+ledger. Agent invocations have a 360-second timeout; the script profile retains
+its 120-second timeout. Finite response schemas, per-repository disclosure
+accounting, the three-invocation agent cap, task/output bounds, isolation,
+and proxy credential custody remain enforced. Production API-proxy model-cost
 enforcement remains available and unchanged for configurations that opt into it.
 
 After AWF reports actual host gateway readiness, both native harnesses wait up
