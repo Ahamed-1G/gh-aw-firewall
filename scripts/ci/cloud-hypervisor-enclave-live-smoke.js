@@ -84,7 +84,15 @@ async function acceptanceCheck(context, step, phase, action) {
     context.checks = [...(context.checks || []), check].slice(-16);
     console.log(`AWF_ENCLAVE_ACCEPTANCE_CHECK ${JSON.stringify(check)}`);
     if (context.observeAdmission && (status === 'failed' || (phase === 'request' && status === 'passed'))) {
-      context.admissionEvidence = conformanceDiagnostics.projectAdmissionEvidence(context.observeAdmission());
+      try {
+        context.admissionEvidence = conformanceDiagnostics.projectAdmissionEvidence(context.observeAdmission());
+      } catch {
+        context.admissionEvidence = conformanceDiagnostics.projectAdmissionEvidence({
+          broker: { status: 'read-failed' }, hostControl: { status: 'read-failed' },
+        });
+        console.error('Could not capture enclave admission evidence; raw error details were suppressed.');
+        if (status !== 'failed') throw mcpFailure('admission-evidence-failed');
+      }
       console.log(`AWF_ENCLAVE_ADMISSION_EVIDENCE ${JSON.stringify({
         step, phase, ...context.admissionEvidence,
       })}`);
@@ -96,10 +104,19 @@ async function acceptanceCheck(context, step, phase, action) {
     const requestId = { 'agent-enospc': 6, 'script-enospc': 7, 'guest-oom': 8,
       'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11 }[step];
     record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId)
-      : phase === 'resource-discovery' ? { inventory: result?.inventory } : {});
+      : ['resource-discovery', 'resource-read'].includes(phase) ? { inventory: result?.inventory }
+        : step === 'crash-recovery' && phase === 'recovery-validation' ? { recovery: result }
+          : step === 'crash-recovery' && phase === 'tools-list' ? mcpResponseMetadata(result, 13)
+            : step === 'crash-recovery' && phase === 'interrupted-response' ? {
+              ...mcpResponseMetadata(result?.response, 12),
+              interrupted: result?.disconnected ? 'disconnected' : 'returned',
+            } : {});
     return result;
   } catch (error) {
-    record('failed', mcpFailures.get(error) || { reason: 'operation-failed' });
+    record('failed', {
+      ...(step === 'crash-recovery' ? { code: typeof error?.code === 'string' ? error.code : 'unknown' } : {}),
+      ...(mcpFailures.get(error) || { reason: 'operation-failed' }),
+    });
     throw error;
   }
 }
@@ -510,7 +527,9 @@ function gatewayCategory(code) {
 
 function trackAwfChild(child) {
   awfStartTimes.set(child, Date.now());
-  child.on('error', () => failedSpawns.add(child));
+  child.on('error', () => {
+    if (!child.pid) failedSpawns.add(child);
+  });
   return child;
 }
 
@@ -1418,6 +1437,18 @@ function resourceRecords(directory, inventory = {}) {
   }
 }
 
+function readRecoveredInvocation(directory, file) {
+  const inventory = {};
+  const records = resourceRecords(directory, inventory);
+  const match = records.find(record => record.file === file);
+  if (!match) {
+    const error = mcpFailure('recovery-record-missing');
+    mcpFailures.get(error).inventory = inventory;
+    throw error;
+  }
+  return { after: match.record, records, inventory };
+}
+
 function resourceDiscoveryEvidence(directory, ownerPid, inventory) {
   const result = { ...inventory };
   let ownNamespace;
@@ -1592,37 +1623,88 @@ async function waitForPath(file, timeoutMs) {
 
 function assertNoSuccessfulResult(response) {
   if (response?.result?.structuredContent?.status === 'ok') {
-    throw new Error('Interrupted live enclave invocation returned a successful result');
+    const error = new Error('Interrupted live enclave invocation returned a successful result');
+    mcpFailures.set(error, { reason: 'interrupted-success', ...mcpResponseMetadata(response, 12) });
+    throw error;
   }
 }
 
 function assertRecoveredInvocation(before, after, records) {
   const matches = records.filter(({ record }) =>
     record.runId === before.runId && record.invocationId === before.invocationId);
-  const identityMetadata = (record) => ({
-    directory: record.directory,
-    directoryIdentity: record.directoryIdentity,
-    ancestors: record.ancestors,
-    mount: record.mount,
-    snapshot: record.snapshot,
-    storage: record.storage && {
-      directory: record.storage.directory,
-      parentIdentity: record.storage.parentIdentity,
-      ancestors: record.storage.ancestors,
-      directoryIdentity: record.storage.directoryIdentity,
-      mountedIdentity: record.storage.mountedIdentity,
-      mounts: record.storage.mounts,
-    },
+  const recovery = {
+    uniqueRecord: matches.length === 1,
+    cleaned: after?.state === 'cleaned',
+    runMatches: after?.runId === before.runId,
+    invocationMatches: after?.invocationId === before.invocationId,
+    directoryIdentityPresent: !!before.directoryIdentity,
+    storageDirectoryIdentityPresent: !!before.storage?.directoryIdentity,
+    storageMountedIdentityPresent: !!before.storage?.mountedIdentity,
+    snapshotPresent: !!before.snapshot,
+    directoryMatches: isDeepStrictEqual(after?.directory, before.directory),
+    directoryIdentityMatches: isDeepStrictEqual(after?.directoryIdentity, before.directoryIdentity),
+    ancestorsMatch: isDeepStrictEqual(after?.ancestors, before.ancestors),
+    mountMatches: isDeepStrictEqual(after?.mount, before.mount),
+    snapshotMatches: isDeepStrictEqual(after?.snapshot, before.snapshot),
+    storageDirectoryMatches: isDeepStrictEqual(after?.storage?.directory, before.storage?.directory),
+    storageParentIdentityMatches: isDeepStrictEqual(after?.storage?.parentIdentity, before.storage?.parentIdentity),
+    storageAncestorsMatch: isDeepStrictEqual(after?.storage?.ancestors, before.storage?.ancestors),
+    storageDirectoryIdentityMatches: isDeepStrictEqual(
+      after?.storage?.directoryIdentity, before.storage?.directoryIdentity,
+    ),
+    storageMountedIdentityMatches: isDeepStrictEqual(after?.storage?.mountedIdentity, before.storage?.mountedIdentity),
+    storageMountsMatch: isDeepStrictEqual(after?.storage?.mounts, before.storage?.mounts),
+  };
+  if (Object.values(recovery).some(value => !value)) {
+    const error = new Error('Live VMM crash recovery did not clean the exact interrupted invocation');
+    mcpFailures.set(error, { reason: 'recovery-validation-failed', recovery });
+    throw error;
+  }
+  return recovery;
+}
+
+function killAwfForRecovery(child, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null || failedSpawns.has(child)) {
+      reject(mcpFailure('host-already-exited'));
+      return;
+    }
+    const finish = (error) => {
+      clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onExit = () => finish();
+    const onError = () => finish(mcpFailure('host-kill-failed'));
+    const timer = setTimeout(() => finish(mcpFailure('host-exit-timeout')), timeoutMs);
+    child.once('exit', onExit);
+    child.once('error', onError);
+    try {
+      if (!child.kill('SIGKILL') && child.exitCode === null && child.signalCode === null) {
+        finish(mcpFailure('host-kill-failed'));
+      }
+    } catch (cause) {
+      const error = mcpFailure('host-kill-failed');
+      mcpFailures.get(error).code = cause?.code;
+      finish(error);
+    }
   });
-  if (matches.length !== 1 || after.state !== 'cleaned'
-      || after.runId !== before.runId
-      || after.invocationId !== before.invocationId
-      || !before.directoryIdentity
-      || !before.storage?.directoryIdentity
-      || !before.storage?.mountedIdentity
-      || !before.snapshot
-      || !isDeepStrictEqual(identityMetadata(after), identityMetadata(before))) {
-    throw new Error('Live VMM crash recovery did not clean the exact interrupted invocation');
+}
+
+async function withCrashRecoveryCleanup(context, action, cleanups, onCleanupFailure) {
+  try {
+    return await action();
+  } catch (error) {
+    for (const { phase, action: cleanup } of cleanups) {
+      try {
+        await acceptanceCheck(context, 'crash-recovery', phase, cleanup);
+      } catch {
+        onCleanupFailure();
+      }
+    }
+    throw error;
   }
 }
 
@@ -2005,7 +2087,9 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     };
     child.once('exit', () => capture(failedSpawns.has(child) ? 'spawn-failure'
       : child.signalCode ? 'signal' : 'exit'));
-    child.once('error', () => capture('spawn-failure'));
+    child.once('error', () => {
+      if (failedSpawns.has(child)) capture('spawn-failure');
+    });
     return child;
   };
   const stopComposeAfterCrash = (composeWorkDir = workDir) => run('docker', [
@@ -2325,88 +2409,105 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     await waitForVmCleanup(15_000, primaryVmResidue);
 
     failureContext.stage = FAILURE_STAGES.CRASH_RECOVERY;
-    const existingResources = new Set(resourceRecords(journalRoot).map(({ file }) => file));
     const crashProbe = [
       'import time',
       'open("/output/crash-probe-started", "w", encoding="ascii").write("started")',
       'while True: time.sleep(1)',
     ].join('\n');
-    const crashRequest = requestMcp(endpoint, gatewayKey, 12, 'tools/call', {
-      name: 'enclave_run_script',
-      arguments: {
-        privateRepo: 'github/gh-aw-firewall',
-        schema: errorSchema,
-        script: crashProbe,
-      },
-    });
-    const crashResponse = crashRequest.then(
-      (response) => ({ response }),
-      () => ({ disconnected: true }),
-    );
-    const active = await waitForInvocationRecord(journalRoot, existingResources, awf.pid, 90_000);
-    const apiSocket = path.join(active.record.storage.directory, 'runs', 'vm', 'api.socket');
-    await waitForPath(path.join(active.record.directory, 'output', 'crash-probe-started'), 90_000);
-    const vmmPid = findProcessForSocket(apiSocket);
-    if (!vmmPid) throw new Error('Live VM crash probe could not identify its exact VMM process');
-
+    const crashController = new AbortController();
     const interruptedWorkDir = workDir;
-    try {
-      process.kill(vmmPid, 'SIGKILL');
-      awf.kill('SIGKILL');
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('AWF host process did not die for recovery probe')), 15_000);
-        awf.once('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
+    await withCrashRecoveryCleanup(failureContext, async () => {
+      const existingResources = await acceptanceCheck(failureContext, 'crash-recovery', 'resource-baseline',
+        () => new Set(resourceRecords(journalRoot).map(({ file }) => file)));
+      let crashResponse;
+      await acceptanceCheck(failureContext, 'crash-recovery', 'request-start', () => {
+        const crashRequest = requestMcp(endpoint, gatewayKey, 12, 'tools/call', {
+          name: 'enclave_run_script',
+          arguments: {
+            privateRepo: 'github/gh-aw-firewall',
+            schema: errorSchema,
+            script: crashProbe,
+          },
+        }, crashController.signal);
+        crashResponse = crashRequest.then(
+          (response) => ({ response }),
+          () => ({ disconnected: true }),
+        );
       });
+      const active = await acceptanceCheck(failureContext, 'crash-recovery', 'resource-discovery',
+        () => waitForInvocationRecord(journalRoot, existingResources, awf.pid, 90_000));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'marker-wait',
+        () => waitForPath(path.join(active.record.directory, 'output', 'crash-probe-started'), 90_000));
+      const vmmPid = await acceptanceCheck(failureContext, 'crash-recovery', 'vmm-discovery', () => {
+        const apiSocket = path.join(active.record.storage.directory, 'runs', 'vm', 'api.socket');
+        const pid = findProcessForSocket(apiSocket);
+        if (!pid) throw mcpFailure('vmm-not-found');
+        return pid;
+      });
+      await acceptanceCheck(failureContext, 'crash-recovery', 'vmm-kill',
+        () => process.kill(vmmPid, 'SIGKILL'));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'host-kill',
+        () => killAwfForRecovery(awf));
       awf = undefined;
-      preRestartLogContents = [
-        fs.readFileSync(awfOut, 'utf8'),
-        fs.readFileSync(awfErr, 'utf8'),
-        ...captureContainerLogs(),
-      ];
-      run('docker', [
-        'compose',
-        '--project-directory', interruptedWorkDir,
-        '--file', path.join(interruptedWorkDir, 'docker-compose.yml'),
-        'down', '--volumes', '--remove-orphans', '--timeout', '5',
-      ]);
-      workDir = path.join(root, 'awf-work-recovery');
-      awfConfigPath = path.join(root, 'awf-config-recovery.json');
-      runDirectories.push(workDir);
-      writeAwfConfig(workDir, awfConfigPath);
-      awf = launchAwf('recovery', 'combined');
-      await waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, {
-        stage: 'recovery', stderrFile: awfErr,
-        startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+      const stdout = await acceptanceCheck(failureContext, 'crash-recovery', 'stdout-read',
+        () => fs.readFileSync(awfOut, 'utf8'));
+      const stderr = await acceptanceCheck(failureContext, 'crash-recovery', 'stderr-read',
+        () => fs.readFileSync(awfErr, 'utf8'));
+      const containerLogs = await acceptanceCheck(failureContext, 'crash-recovery', 'container-logs',
+        () => captureContainerLogs());
+      preRestartLogContents = [stdout, stderr, ...containerLogs];
+      await acceptanceCheck(failureContext, 'crash-recovery', 'compose-stop',
+        () => stopComposeAfterCrash(interruptedWorkDir));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'recovery-config', () => {
+        workDir = path.join(root, 'awf-work-recovery');
+        awfConfigPath = path.join(root, 'awf-config-recovery.json');
+        runDirectories.push(workDir);
+        writeAwfConfig(workDir, awfConfigPath);
       });
-      await waitForHostGatewayReadiness(awf, Date.now() + 150_000, {
-        stage: 'recovery', stderrFile: awfErr,
-        startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+      await acceptanceCheck(failureContext, 'crash-recovery', 'recovery-launch', () => {
+        awf = launchAwf('recovery', 'combined');
       });
-      failureContext.stage = FAILURE_STAGES.PRIMARY;
-      primaryVmResidue = await waitForPrimaryVmReadiness(awf, Date.now() + 5 * 60_000, {
-        startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+      await acceptanceCheck(failureContext, 'crash-recovery', 'broker-readiness',
+        () => waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, {
+          stage: 'recovery', stderrFile: awfErr,
+          startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+        }));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'gateway-readiness',
+        () => waitForHostGatewayReadiness(awf, Date.now() + 150_000, {
+          stage: 'recovery', stderrFile: awfErr,
+          startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+        }));
+      primaryVmResidue = await acceptanceCheck(failureContext, 'crash-recovery', 'primary-readiness',
+        () => waitForPrimaryVmReadiness(awf, Date.now() + 5 * 60_000, {
+          startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
+        }));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'tools-list', async () => {
+        const recoveryTools = await requestMcp(endpoint, gatewayKey, 13, 'tools/list', {});
+        if (!Array.isArray(recoveryTools?.result?.tools)) {
+          throw mcpFailure('recovery-tools-invalid', recoveryTools, 13);
+        }
+        return recoveryTools;
       });
-      failureContext.stage = FAILURE_STAGES.CRASH_RECOVERY;
-      const recoveryTools = await requestMcp(endpoint, gatewayKey, 13, 'tools/list', {});
-      if (!Array.isArray(recoveryTools?.result?.tools)) {
-        throw new Error('Live broker did not become ready after host-executor recovery');
-      }
-      const afterCrash = JSON.parse(fs.readFileSync(active.file, 'utf8'));
-      assertRecoveredInvocation(active.record, afterCrash, resourceRecords(journalRoot));
-      assertNoSuccessfulResult((await crashResponse).response);
-      await waitForVmCleanup(15_000, primaryVmResidue);
-    } catch (error) {
-      if (awf && awf.exitCode === null) awf.kill('SIGKILL');
-      try {
-        stopComposeAfterCrash(interruptedWorkDir);
-      } catch {
-        keepArtifacts = true;
-      }
-      throw error;
-    }
+      const recovered = await acceptanceCheck(failureContext, 'crash-recovery', 'resource-read',
+        () => readRecoveredInvocation(journalRoot, active.file));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'recovery-validation',
+        () => assertRecoveredInvocation(active.record, recovered.after, recovered.records));
+      await acceptanceCheck(failureContext, 'crash-recovery', 'interrupted-response', async () => {
+        const result = await crashResponse;
+        assertNoSuccessfulResult(result.response);
+        return result;
+      });
+      await acceptanceCheck(failureContext, 'crash-recovery', 'cleanup',
+        () => waitForVmCleanup(15_000, primaryVmResidue));
+    }, [
+      { phase: 'request-abort', action: () => crashController.abort() },
+      { phase: 'host-cleanup', action: async () => {
+        if (awf && awf.exitCode === null && awf.signalCode === null && !failedSpawns.has(awf)) {
+          await stopAwf(awf);
+        }
+      } },
+      { phase: 'compose-cleanup', action: () => stopComposeAfterCrash(interruptedWorkDir) },
+    ], () => { keepArtifacts = true; });
 
     failureContext.stage = FAILURE_STAGES.OUTPUT_REDACTION;
     const logContents = [
@@ -2595,20 +2696,41 @@ function removePrivateAwfLogs(stdoutFile, stderrFile, startupErrorFiles = []) {
 
 function stopAwf(child, graceMs = 60_000, terminateMs = 5000) {
   return new Promise((resolve, reject) => {
-    const terminate = setTimeout(() => child.kill('SIGTERM'), graceMs);
+    if (typeof child.exitCode === 'number' || child.signalCode) {
+      resolve();
+      return;
+    }
+    const sendSignal = (signal) => {
+      try {
+        child.kill(signal);
+        return true;
+      } catch (cause) {
+        onError(cause);
+        return false;
+      }
+    };
+    const terminate = setTimeout(() => sendSignal('SIGTERM'), graceMs);
     const kill = setTimeout(() => {
-      child.kill('SIGKILL');
-      finish(new Error('AWF did not exit within the live fixture cleanup deadline'));
+      if (sendSignal('SIGKILL')) {
+        finish(new Error('AWF did not exit within the live fixture cleanup deadline'));
+      }
     }, graceMs + terminateMs);
     const finish = (error) => {
       clearTimeout(terminate);
       clearTimeout(kill);
       child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
       if (error) reject(error);
       else resolve();
     };
     const onExit = () => finish();
+    const onError = (cause) => {
+      const error = mcpFailure('host-kill-failed');
+      mcpFailures.get(error).code = cause?.code;
+      finish(error);
+    };
     child.once('exit', onExit);
+    child.once('error', onError);
   });
 }
 
@@ -2661,6 +2783,8 @@ module.exports = {
   assertExpectedToolResult,
   assertRecoveredInvocation,
   assertNoSuccessfulResult,
+  killAwfForRecovery,
+  withCrashRecoveryCleanup,
   buildAgentGuestProbe,
   buildAgentEnospcProbe,
   buildConstantObjectSchema,
@@ -2672,6 +2796,7 @@ module.exports = {
   acceptanceCheck,
   observeInvocationRecords,
   resourceRecords,
+  readRecoveredInvocation,
   resourceDiscoveryEvidence,
   waitForInvocationRecord,
   waitForInvocationOutcome,

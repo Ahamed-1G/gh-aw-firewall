@@ -76,6 +76,53 @@ describe('public enclave conformance diagnostic retention', () => {
     expect(records()).not.toContain(secret);
   });
 
+  it('retains the original crash-recovery failure and bounded cleanup evidence without private metadata', () => {
+    const context = prepare();
+    const check = {
+      step: 'crash-recovery', phase: 'recovery-validation', status: 'failed',
+      reason: 'recovery-validation-failed', code: 'EIO', message: secret,
+      recovery: {
+        uniqueRecord: true, cleaned: false, storageMountedIdentityMatches: false,
+        directoryMatches: secret, directoryIdentity: secret, inode: 23456, runId: secret,
+      },
+    };
+    diagnostics.collect(context, { status: 'failed', check, checks: [
+      check,
+      ...Array(20).fill({
+        step: 'crash-recovery', phase: 'host-cleanup', status: 'failed', code: 'EPERM',
+        reason: 'operation-failed', stack: secret,
+      }),
+      { step: 'crash-recovery', phase: 'compose-cleanup', status: 'passed', payload: secret },
+    ] });
+    const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+    expect(summary.check).toEqual({
+      step: 'crash-recovery', phase: 'recovery-validation', status: 'failed',
+      reason: 'recovery-validation-failed', code: 'EIO',
+      recovery: { uniqueRecord: true, cleaned: false, storageMountedIdentityMatches: false },
+    });
+    expect(summary.checks).toHaveLength(16);
+    expect(summary.checks[0]).toEqual({
+      step: 'crash-recovery', phase: 'host-cleanup', status: 'failed', reason: 'operation-failed', code: 'EPERM',
+    });
+    expect(summary.checks.at(-1)).toEqual({ step: 'crash-recovery', phase: 'compose-cleanup', status: 'passed' });
+    expect(diagnostics.projectAcceptanceCheck(summary.check)).toEqual(summary.check);
+    expect(records()).not.toMatch(/PRIVATE_TOKEN|23456/);
+  });
+
+  it('rejects arbitrary crash operation, errno, invariant and response values at publication', () => {
+    expect(diagnostics.projectAcceptanceCheck({ step: 'crash-recovery', phase: secret, status: 'failed' }))
+      .toBeUndefined();
+    expect(diagnostics.projectAcceptanceCheck({
+      step: 'crash-recovery', phase: 'host-kill', status: 'failed', reason: secret, code: secret,
+      interrupted: secret, recovery: { cleaned: secret, [secret]: true },
+    })).toEqual({ step: 'crash-recovery', phase: 'host-kill', status: 'failed', recovery: {} });
+    expect(diagnostics.projectAcceptanceCheck({
+      step: 'crash-recovery', phase: 'interrupted-response', status: 'passed', interrupted: 'disconnected',
+    })).toEqual({
+      step: 'crash-recovery', phase: 'interrupted-response', status: 'passed', interrupted: 'disconnected',
+    });
+  });
+
   it('retains only finite publication and discovery facts across upload reprojection', () => {
     const context = prepare();
     const file = invocation('script');

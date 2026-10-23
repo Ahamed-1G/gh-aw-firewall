@@ -1523,6 +1523,27 @@ after its guest has reached the marker, waits for resource cleanup, and kills an
 identified VMM plus the AWF host process to verify that restart cleans the
 exact pending journal identity without replaying a successful result.
 
+Crash recovery emits a bounded `AWF_ENCLAVE_ACCEPTANCE_CHECK` for each discovery,
+marker, process termination, log capture, Compose teardown, restart/readiness,
+tool-list, journal-read, identity-validation, interrupted-response and cleanup
+operation. Recovery journal reads use the protected, no-symlink, size-bounded
+resource inventory reader. Identity validation reports individual boolean
+comparisons, including cleaned state and retained directory, mount, snapshot
+and storage identities, without exposing their values. A host exit listener is
+registered before `SIGKILL`; kill failures and exit deadlines remove their timers
+and listeners and report finite reasons. Graceful shutdown also contains signal
+exceptions and child error events inside its awaited operation. A signal-delivery
+error for a spawned host is not treated as a spawn failure or a verified exit.
+On failure, the harness independently
+attempts request cancellation, host shutdown and interrupted-Compose cleanup,
+retains the first failed check even if later cleanup fails, and preserves private
+state when cleanup cannot complete. Admission-evidence collection failures are
+explicit and cannot replace the original error. Public evidence contains only
+allowlisted phases, reasons, errno and boolean/response-shape facts, never raw
+errors, paths, identifiers or payloads. These guards produce a controlled failed
+acceptance result; they do not ignore a recovery failure, resume interrupted
+work, change recovery policy or allow a false success.
+
 Resource discovery reports raw-entry, regular-file, resource-suffix and valid-name
 count buckets before applying the new-record, owner and readiness filters.
 Missing or unreadable directories are explicit inventory failures, never empty

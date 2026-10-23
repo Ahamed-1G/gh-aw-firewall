@@ -20,16 +20,22 @@ const UPLOAD_NAME = /^(?:acceptance|invocation-[0-9]+|session-[0-9]+|proxy-[0-9]
 const MAX_RECORDS = 128;
 
 const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation',
-  'agent-enospc', 'script-enospc', 'guest-oom'];
+  'agent-enospc', 'script-enospc', 'guest-oom', 'crash-recovery'];
 const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-baseline', 'resource-discovery',
-  'marker-wait', 'disconnect-validation', 'execution-validation'];
+  'marker-wait', 'disconnect-validation', 'execution-validation',
+  'request-start', 'vmm-discovery', 'vmm-kill', 'host-kill',
+  'stdout-read', 'stderr-read', 'container-logs', 'compose-stop', 'recovery-config', 'recovery-launch',
+  'broker-readiness', 'gateway-readiness', 'primary-readiness', 'tools-list', 'resource-read',
+  'recovery-validation', 'interrupted-response', 'request-abort', 'host-cleanup', 'compose-cleanup'];
 const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version', 'request-id',
   'jsonrpc-error', 'result-missing', 'tool-is-error', 'structured-content', 'structured-fields',
   'content-mismatch', 'expected-error-status', 'expected-ok-status', 'result-mismatch',
   'http-status', 'invalid-json', 'response-too-large',
   'request-timeout', 'request-failed', 'response-aborted', 'response-failed', 'disconnect-not-cancelled',
   'resource-discovery-timeout', 'resource-inventory-failed', 'invocation-evidence-invalid',
-  'invocation-evidence-timeout', 'invocation-outcome-mismatch'];
+  'invocation-evidence-timeout', 'invocation-outcome-mismatch', 'admission-evidence-failed',
+  'vmm-not-found', 'host-already-exited', 'host-kill-failed', 'host-exit-timeout',
+  'recovery-tools-invalid', 'recovery-record-missing', 'recovery-validation-failed', 'interrupted-success'];
 const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'resultPresent',
   'toolIsError', 'structuredPresent', 'contentMatches'];
 const RESOURCE_FLAGS = ['newRecords', 'pending', 'ownerMatches', 'directoryReady',
@@ -38,6 +44,12 @@ const RESOURCE_OPERATIONS = ['directory-lstat', 'directory-trust', 'directory-re
   'record-open', 'record-fstat', 'record-validate', 'record-read', 'record-close',
   'record-parse', 'record-identity', 'record-lstat', 'complete'];
 const RESOURCE_CODES = ['none', 'ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'ELOOP', 'unknown'];
+const RECOVERY_FLAGS = ['uniqueRecord', 'cleaned', 'runMatches', 'invocationMatches',
+  'directoryIdentityPresent', 'storageDirectoryIdentityPresent', 'storageMountedIdentityPresent', 'snapshotPresent',
+  'directoryMatches', 'directoryIdentityMatches', 'ancestorsMatch', 'mountMatches', 'snapshotMatches',
+  'storageDirectoryMatches', 'storageParentIdentityMatches', 'storageAncestorsMatch',
+  'storageDirectoryIdentityMatches', 'storageMountedIdentityMatches', 'storageMountsMatch'];
+const RECOVERY_CODES = [...RESOURCE_CODES, 'ESRCH', 'EBUSY', 'ETIMEDOUT', 'ENOSPC'];
 
 function projectResourceInventory(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -191,6 +203,16 @@ function projectAcceptanceCheck(value) {
       || !['started', 'passed', 'failed'].includes(value.status)) return undefined;
   const result = { step: value.step, phase: value.phase, status: value.status };
   if (CHECK_REASONS.includes(value.reason)) result.reason = value.reason;
+  if (value.step === 'crash-recovery') {
+    if (RECOVERY_CODES.includes(value.code)) result.code = value.code;
+    if (['disconnected', 'returned'].includes(value.interrupted)) result.interrupted = value.interrupted;
+    if (value.recovery && typeof value.recovery === 'object') {
+      result.recovery = {};
+      for (const key of RECOVERY_FLAGS) {
+        if (typeof value.recovery[key] === 'boolean') result.recovery[key] = value.recovery[key];
+      }
+    }
+  }
   if (value.resources && typeof value.resources === 'object') {
     result.resources = {};
     for (const key of RESOURCE_FLAGS) {

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync, spawn, ChildProcess } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import { validateSchema, validateValueAgainstSchema } from '../../src/bounded-execution/finite-schema';
 import { hostExecutorResultDigest } from '../../src/enclave/host-executor-protocol';
@@ -83,7 +83,7 @@ const harness = require(harnessPath) as {
   removePrivateAwfLogs(stdoutFile: string, stderrFile: string, startupErrorFiles?: string[]): void;
   stopAwf(child: EventEmitter & { kill(signal: string): void }, graceMs: number, terminateMs: number): Promise<void>;
   reportFailure(error: unknown, stage?: string): void;
-  trackAwfChild(child: ChildProcess): ChildProcess;
+  trackAwfChild<T extends EventEmitter & { pid?: number }>(child: T): T;
   RELEASE_ASSETS: string[];
   assertReleaseAssets(required: string[], published: string[]): void;
   assertUnifiedProfiles(artifacts: unknown, primary: unknown, enclave: unknown, sbom: unknown): void;
@@ -91,6 +91,17 @@ const harness = require(harnessPath) as {
   assertNoSentinelLeak(directories: string[], logs: string[], sentinel: string): void;
   assertExpectedToolResult(response: unknown, requestId: number, expected: unknown, label: string): void;
   assertNoSuccessfulResult(response: unknown): void;
+  killAwfForRecovery(
+    child: EventEmitter & StartupChild & { kill(signal: string): boolean }, timeoutMs?: number,
+  ): Promise<void>;
+  withCrashRecoveryCleanup<T>(
+    context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> },
+    action: () => Promise<T>, cleanups: Array<{ phase: string; action: () => unknown }>,
+    onCleanupFailure: () => void,
+  ): Promise<T>;
+  readRecoveredInvocation(directory: string, file: string): {
+    after: Record<string, unknown>; records: Array<{ file: string; record: Record<string, unknown> }>;
+  };
   assertNoVmResidue(expectedPrimary?: {
     namespaces: string[];
     processes: Array<{ pid: string; startTime: string }>;
@@ -137,7 +148,7 @@ const harness = require(harnessPath) as {
       };
     },
     records: Array<{ record: { runId: string; invocationId: string } }>,
-  ): void;
+  ): Record<string, boolean>;
   buildAgentGuestProbe(): { expected: Record<string, unknown>; schema: unknown; prompt: string };
   buildAgentEnospcProbe(): { expected: Record<string, unknown>; schema: unknown; prompt: string };
   buildConstantObjectSchema(expected: Record<string, unknown>): unknown;
@@ -1415,7 +1426,7 @@ print(json.dumps({"milestones": milestones, "output": value, "failure": failure,
     })).not.toThrow();
     const source = fs.readFileSync(harnessPath, 'utf8');
     expect(source).toContain("process.kill(vmmPid, 'SIGKILL')");
-    expect(source).toContain("awf.kill('SIGKILL')");
+    expect(source).toContain('killAwfForRecovery(awf)');
     expect(source).toContain("awf = launchAwf('recovery', 'combined')");
     expect(source).toContain("recoveryTools = await requestMcp");
     expect(source).toContain("open(\"/output/cancel-probe-started\"");
@@ -2015,6 +2026,308 @@ describe('bounded MCP acceptance check diagnostics', () => {
   });
 });
 
+describe('guarded crash-recovery diagnostics', () => {
+  const sentinel = 'PRIVATE_CRASH_RECOVERY_PAYLOAD_/private/path';
+  const phases = [
+    'resource-baseline', 'request-start', 'resource-discovery', 'marker-wait', 'vmm-discovery',
+    'vmm-kill', 'host-kill', 'stdout-read', 'stderr-read', 'container-logs', 'compose-stop',
+    'recovery-config', 'recovery-launch', 'broker-readiness', 'gateway-readiness',
+    'primary-readiness', 'tools-list', 'resource-read', 'recovery-validation', 'interrupted-response', 'cleanup',
+  ];
+  function crashRecord() {
+    return {
+      runId: 'a'.repeat(32), invocationId: 'b'.repeat(24), state: 'cleaned',
+      directory: sentinel, directoryIdentity: { device: 1, inode: 2 },
+      ancestors: [{ path: sentinel, identity: { device: 1, inode: 3 } }],
+      mount: { mountId: 1, device: 2 },
+      snapshot: { path: sentinel, identity: { device: 3, inode: 4 } },
+      storage: {
+        directory: sentinel, parentIdentity: { device: 1, inode: 5 },
+        ancestors: [{ path: sentinel, identity: { device: 1, inode: 1 } }],
+        directoryIdentity: { device: 4, inode: 5 }, mountedIdentity: { device: 4, inode: 6 },
+        mounts: [{ mountId: 7, device: 8 }],
+      },
+    };
+  }
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(phases)('retains the exact failed %s phase and errno through independent cleanup', async phase => {
+    const source = fs.readFileSync(harnessPath, 'utf8');
+    expect(source).toContain(`acceptanceCheck(failureContext, 'crash-recovery', '${phase}'`);
+    const error = Object.assign(new Error(sentinel), { code: 'EIO' });
+    const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+    const order: string[] = [];
+    let retained = false;
+    await expect(harness.withCrashRecoveryCleanup(context,
+      () => harness.acceptanceCheck(context, 'crash-recovery', phase, () => { throw error; }),
+      ['request-abort', 'host-cleanup', 'compose-cleanup'].map(cleanup => ({
+        phase: cleanup, action: () => {
+          order.push(cleanup);
+          if (cleanup !== 'compose-cleanup') throw new Error(sentinel);
+        },
+      })),
+      () => { retained = true; })).rejects.toBe(error);
+    expect(order).toEqual(['request-abort', 'host-cleanup', 'compose-cleanup']);
+    expect(retained).toBe(true);
+    expect(context.check).toEqual({
+      step: 'crash-recovery', phase, status: 'failed', reason: 'operation-failed', code: 'EIO',
+    });
+    expect(context.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'host-cleanup', status: 'failed' }),
+      expect.objectContaining({ phase: 'compose-cleanup', status: 'passed' }),
+    ]));
+    expect(JSON.stringify([context, jest.mocked(console.log).mock.calls, jest.mocked(console.error).mock.calls]))
+      .not.toContain(sentinel);
+  });
+
+  it('does not run failure cleanup after successful recovery', async () => {
+    const cleanup = jest.fn();
+    const preserve = jest.fn();
+    await expect(harness.withCrashRecoveryCleanup({}, async () => true,
+      [{ phase: 'host-cleanup', action: cleanup }], preserve)).resolves.toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(preserve).not.toHaveBeenCalled();
+  });
+
+  it('does not replace the primary failure when admission evidence collection throws', async () => {
+    const error = new Error(sentinel);
+    const context = { observeAdmission: () => { throw new Error(sentinel); } };
+    await expect(harness.acceptanceCheck(context, 'crash-recovery', 'tools-list',
+      () => { throw error; })).rejects.toBe(error);
+    expect(context).toMatchObject({
+      check: { step: 'crash-recovery', phase: 'tools-list', status: 'failed', reason: 'operation-failed' },
+      admissionEvidence: { broker: { status: 'read-failed' }, hostControl: { status: 'read-failed' } },
+    });
+    expect(console.error).toHaveBeenCalledWith(
+      'Could not capture enclave admission evidence; raw error details were suppressed.',
+    );
+    expect(JSON.stringify([context, jest.mocked(console.error).mock.calls])).not.toContain(sentinel);
+  });
+
+  it('still fails acceptance when required admission evidence cannot be captured after a request', async () => {
+    const context = { observeAdmission: () => { throw new Error(sentinel); } };
+    await expect(harness.acceptanceCheck(context, 'guest-failure', 'request', () => undefined)).rejects.toThrow();
+    expect(context).toMatchObject({ check: {
+      phase: 'request', status: 'failed', reason: 'admission-evidence-failed',
+    } });
+  });
+
+  const mismatches: Array<[string, (record: ReturnType<typeof crashRecord>) => void]> = [
+    ['cleaned', record => { record.state = 'pending'; }],
+    ['runMatches', record => { record.runId = sentinel; }],
+    ['invocationMatches', record => { record.invocationId = sentinel; }],
+    ['directoryMatches', record => { record.directory = '/different'; }],
+    ['directoryIdentityMatches', record => { record.directoryIdentity.inode = 99; }],
+    ['ancestorsMatch', record => { record.ancestors[0].identity.inode = 99; }],
+    ['mountMatches', record => { record.mount.mountId = 99; }],
+    ['snapshotMatches', record => { record.snapshot.identity.inode = 99; }],
+    ['storageDirectoryMatches', record => { record.storage.directory = '/different'; }],
+    ['storageParentIdentityMatches', record => { record.storage.parentIdentity.inode = 99; }],
+    ['storageAncestorsMatch', record => { record.storage.ancestors[0].identity.inode = 99; }],
+    ['storageDirectoryIdentityMatches', record => { record.storage.directoryIdentity.inode = 99; }],
+    ['storageMountedIdentityMatches', record => { record.storage.mountedIdentity.inode = 99; }],
+    ['storageMountsMatch', record => { record.storage.mounts[0].mountId = 99; }],
+  ];
+  it.each(mismatches)('names the failed recovery invariant %s without exporting identities', async (flag, mutate) => {
+    const before = crashRecord();
+    const after = crashRecord();
+    mutate(after);
+    const context: { check?: Record<string, unknown> } = {};
+    await expect(harness.acceptanceCheck(context, 'crash-recovery', 'recovery-validation',
+      () => harness.assertRecoveredInvocation(before, after, [{ record: after }]))).rejects.toThrow();
+    expect(context.check).toMatchObject({
+      reason: 'recovery-validation-failed', recovery: { [flag]: false },
+    });
+    expect(Object.values(context.check?.recovery || {}).every(value => typeof value === 'boolean')).toBe(true);
+    expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+  });
+
+  it.each(['directoryIdentityPresent', 'storageDirectoryIdentityPresent',
+    'storageMountedIdentityPresent', 'snapshotPresent', 'uniqueRecord'])(
+    'diagnoses the missing recovery prerequisite %s', async flag => {
+      const before: Parameters<typeof harness.assertRecoveredInvocation>[0] = crashRecord();
+      const after = crashRecord();
+      const records = [{ record: after }];
+      if (flag === 'directoryIdentityPresent') before.directoryIdentity = undefined;
+      if (flag === 'storageDirectoryIdentityPresent') before.storage.directoryIdentity = undefined;
+      if (flag === 'storageMountedIdentityPresent') before.storage.mountedIdentity = undefined;
+      if (flag === 'snapshotPresent') before.snapshot = undefined;
+      if (flag === 'uniqueRecord') records.push({ record: after });
+      const context: { check?: Record<string, unknown> } = {};
+      await expect(harness.acceptanceCheck(context, 'crash-recovery', 'recovery-validation',
+        () => harness.assertRecoveredInvocation(before, after, records))).rejects.toThrow();
+      expect(context.check).toMatchObject({ recovery: { [flag]: false } });
+    },
+  );
+
+  it('retains successful invariant comparisons and distinguishes interrupted success from disconnect', async () => {
+    const before = crashRecord();
+    const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+    await harness.acceptanceCheck(context, 'crash-recovery', 'recovery-validation',
+      () => harness.assertRecoveredInvocation(before, before, [{ record: before }]));
+    expect(Object.values(context.check?.recovery || {})).toEqual(Array(19).fill(true));
+    await harness.acceptanceCheck(context, 'crash-recovery', 'interrupted-response', () => ({ disconnected: true }));
+    expect(context.check).toMatchObject({ interrupted: 'disconnected', status: 'passed' });
+    const response = { jsonrpc: '2.0', id: 12, result: { structuredContent: { status: 'ok', result: sentinel } } };
+    await expect(harness.acceptanceCheck(context, 'crash-recovery', 'interrupted-response',
+      () => harness.assertNoSuccessfulResult(response))).rejects.toThrow();
+    expect(context.check).toMatchObject({
+      reason: 'interrupted-success', response: { structuredStatus: 'ok', idMatches: true },
+    });
+    expect(JSON.stringify(context)).not.toContain(sentinel);
+  });
+
+  it.each(['valid', 'missing', 'malformed', 'symlink', 'oversized'])(
+    'reads recovery records through the bounded protected inventory: %s', async kind => {
+      const directory = fs.mkdtempSync(path.join(root, '.crash-record-'));
+      const record = crashRecord();
+      const file = path.join(directory, `${record.runId}-${record.invocationId}.resources.json`);
+      const context: { check?: Record<string, unknown> } = {};
+      try {
+        if (kind === 'symlink') fs.symlinkSync(path.join(directory, sentinel), file);
+        else if (kind !== 'missing') fs.writeFileSync(file, kind === 'malformed' ? sentinel
+          : kind === 'oversized' ? sentinel.repeat(8192) : JSON.stringify(record), { mode: 0o600 });
+        const read = () => harness.acceptanceCheck(context, 'crash-recovery', 'resource-read',
+          () => harness.readRecoveredInvocation(directory, file));
+        if (kind === 'valid') {
+          await expect(read()).resolves.toMatchObject({ after: record, records: [{ file, record }] });
+          expect(context.check).toMatchObject({ inventory: { operation: 'complete' }, status: 'passed' });
+        } else {
+          await expect(read()).rejects.toThrow();
+          expect(context.check).toMatchObject({
+            reason: ['missing', 'symlink'].includes(kind) ? 'recovery-record-missing' : 'resource-inventory-failed',
+          });
+          if (kind === 'malformed') expect(context.check).toMatchObject({ inventory: { operation: 'record-parse' } });
+          if (kind === 'oversized') expect(context.check).toMatchObject({ inventory: { operation: 'record-validate' } });
+        }
+        expect(JSON.stringify(context)).not.toContain(sentinel);
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe('crash-recovery host termination races', () => {
+  let child: EventEmitter & StartupChild & { kill: jest.Mock<boolean, [string]> };
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    child = Object.assign(new EventEmitter(), {
+      exitCode: null, signalCode: null, kill: jest.fn((signal: string) => signal === 'SIGKILL'),
+    });
+  });
+  afterEach(() => {
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('error')).toBe(0);
+    expect(jest.getTimerCount()).toBe(0);
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('registers its exit listener before killing the host and clears its timer', async () => {
+    child.kill.mockImplementation(() => { child.emit('exit', null, 'SIGKILL'); return true; });
+    await expect(harness.killAwfForRecovery(child)).resolves.toBeUndefined();
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('skips shutdown timers for a host that already exited', async () => {
+    child.exitCode = 0;
+    await expect(harness.stopAwf(child, 100, 100)).resolves.toBeUndefined();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('still cleans a production-tracked host after a signal-delivery error', async () => {
+    const tracked = harness.trackAwfChild(Object.assign(child, { pid: 123 }));
+    const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+    child.kill.mockImplementationOnce(() => {
+      child.emit('error', new Error('PRIVATE_HOST_KILL_DETAIL'));
+      return false;
+    }).mockImplementationOnce(() => {
+      child.emit('exit', 0);
+      return true;
+    });
+    try {
+      const error = await harness.acceptanceCheck(context, 'crash-recovery', 'host-kill',
+        () => harness.killAwfForRecovery(tracked)).catch(failure => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(harness.failedSpawns.has(tracked)).toBe(false);
+      const preserve = jest.fn();
+      const pending = harness.withCrashRecoveryCleanup(context, async () => { throw error; }, [
+        { phase: 'host-cleanup', action: async () => {
+          if (tracked.exitCode === null && tracked.signalCode === null && !harness.failedSpawns.has(tracked)) {
+            await harness.stopAwf(tracked, 100, 100);
+          }
+        } },
+      ], preserve);
+      const rejected = expect(pending).rejects.toBe(error);
+      await jest.advanceTimersByTimeAsync(100);
+      await rejected;
+      expect(child.kill.mock.calls).toEqual([['SIGKILL'], ['SIGTERM']]);
+      expect(context.check).toMatchObject({ phase: 'host-kill', status: 'failed', reason: 'host-kill-failed' });
+      expect(context.checks).toEqual(expect.arrayContaining([
+        { step: 'crash-recovery', phase: 'host-cleanup', status: 'passed' },
+      ]));
+      expect(preserve).not.toHaveBeenCalled();
+      expect(child.listenerCount('error')).toBe(1);
+    } finally {
+      child.removeAllListeners('error');
+    }
+  });
+
+  it.each(['SIGTERM', 'SIGKILL', 'error-event'])(
+    'contains a cleanup %s failure inside the awaited operation', async failure => {
+      const context: { check?: Record<string, unknown> } = {};
+      const error = Object.assign(new Error('PRIVATE_HOST_KILL_DETAIL'), { code: 'ESRCH' });
+      child.kill.mockImplementation(signal => {
+        if (failure === 'error-event') child.emit('error', error);
+        else if (signal === failure) throw error;
+        return true;
+      });
+      const pending = harness.acceptanceCheck(context, 'crash-recovery', 'host-cleanup',
+        () => harness.stopAwf(child, 100, 100));
+      const rejected = expect(pending).rejects.toThrow();
+      expect(() => jest.advanceTimersByTime(200)).not.toThrow();
+      await rejected;
+      expect(context.check).toMatchObject({
+        phase: 'host-cleanup', status: 'failed', reason: 'host-kill-failed', code: 'ESRCH',
+      });
+      expect(JSON.stringify(context)).not.toContain('PRIVATE_HOST_KILL_DETAIL');
+    },
+  );
+
+  it.each(['already-exited', 'false', 'throw', 'error-event', 'timeout'])(
+    'handles %s as a finite failure instead of an uncaught error or leaked timer', async kind => {
+      const context: { check?: Record<string, unknown> } = {};
+      if (kind === 'already-exited') child.exitCode = 0;
+      if (kind === 'false') child.kill.mockReturnValue(false);
+      if (kind === 'throw') child.kill.mockImplementation(() => {
+        throw Object.assign(new Error('PRIVATE_HOST_KILL_DETAIL'), { code: 'ESRCH' });
+      });
+      if (kind === 'error-event') child.kill.mockImplementation(() => {
+        child.emit('error', new Error('PRIVATE_HOST_KILL_DETAIL')); return true;
+      });
+      const pending = harness.acceptanceCheck(context, 'crash-recovery', 'host-kill',
+        () => harness.killAwfForRecovery(child, 100));
+      const rejected = expect(pending).rejects.toThrow();
+      if (kind === 'timeout') jest.advanceTimersByTime(100);
+      await rejected;
+      expect(context.check).toMatchObject({
+        phase: 'host-kill', status: 'failed',
+        reason: kind === 'already-exited' ? 'host-already-exited'
+          : kind === 'timeout' ? 'host-exit-timeout' : 'host-kill-failed',
+      });
+      if (kind === 'throw') expect(context.check?.code).toBe('ESRCH');
+      if (kind === 'already-exited') expect(child.kill).not.toHaveBeenCalled();
+      expect(JSON.stringify(context)).not.toContain('PRIVATE_HOST_KILL_DETAIL');
+    },
+  );
+});
+
 describe('sanitized live acceptance failure reporting', () => {
   const sentinel = 'AWF_PASSWD_SENTINEL_sensitive-user-record';
   const expected = (stage: string) => `Live enclave acceptance failed during ${stage}; `
@@ -2413,7 +2726,10 @@ describe('sanitized live acceptance failure reporting', () => {
       const liveSource = fs.readFileSync(harnessPath, 'utf8');
       const probeSource = fs.readFileSync(path.join(root,
         'scripts/ci/cloud-hypervisor-enclave-environment-probe.js'), 'utf8');
-      expect(liveSource.match(/primaryVmResidue = await waitForPrimaryVmReadiness\(/g)).toHaveLength(3);
+      expect(liveSource.match(/waitForPrimaryVmReadiness\(\s*awf,/g)).toHaveLength(3);
+      expect(liveSource).toContain(
+        "primaryVmResidue = await acceptanceCheck(failureContext, 'crash-recovery', 'primary-readiness',",
+      );
       expect(probeSource).toContain('primaryVmResidue = await live.waitForPrimaryVmReadiness(');
       expect(liveSource).not.toContain('capturePrimaryVmResidue');
       expect(probeSource).not.toContain('capturePrimaryVmResidue');
