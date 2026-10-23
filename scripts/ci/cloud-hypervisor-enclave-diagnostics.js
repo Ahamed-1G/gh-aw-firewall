@@ -20,13 +20,15 @@ const UPLOAD_NAME = /^(?:acceptance|invocation-[0-9]+|session-[0-9]+|proxy-[0-9]
 const MAX_RECORDS = 128;
 
 const CHECK_STEPS = ['guest-failure', 'guest-timeout', 'guest-cancellation',
-  'agent-enospc', 'script-enospc', 'guest-oom', 'crash-recovery'];
+  'agent-enospc', 'script-enospc', 'guest-oom', 'crash-recovery', 'script-only', 'agent-only'];
 const CHECK_PHASES = ['request', 'result-validation', 'cleanup', 'resource-baseline', 'resource-discovery',
   'marker-wait', 'resource-refresh', 'disconnect-validation', 'execution-validation',
   'request-start', 'vmm-discovery', 'vmm-kill', 'host-kill',
   'stdout-read', 'stderr-read', 'container-logs', 'compose-stop', 'recovery-config', 'recovery-launch',
   'broker-readiness', 'gateway-readiness', 'primary-readiness', 'tools-list', 'resource-read',
-  'recovery-validation', 'interrupted-response', 'request-abort', 'host-cleanup', 'compose-cleanup'];
+  'recovery-validation', 'interrupted-response', 'request-abort', 'host-cleanup', 'compose-cleanup',
+  'stop-marker', 'host-stop', 'host-stop-validation', 'stop-marker-remove', 'profile-config', 'profile-launch',
+  'initialize', 'initialize-validation', 'tools-validation', 'output-redaction'];
 const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version', 'request-id',
   'jsonrpc-error', 'result-missing', 'tool-is-error', 'structured-content', 'structured-fields',
   'content-mismatch', 'expected-error-status', 'expected-ok-status', 'result-mismatch',
@@ -36,7 +38,7 @@ const CHECK_REASONS = ['operation-failed', 'response-missing', 'jsonrpc-version'
   'invocation-evidence-timeout', 'invocation-outcome-mismatch', 'admission-evidence-failed',
   'vmm-not-found', 'host-already-exited', 'host-kill-failed', 'host-exit-timeout',
   'recovery-tools-invalid', 'recovery-record-missing', 'recovery-validation-failed', 'interrupted-success',
-  'crash-baseline-invalid'];
+  'crash-baseline-invalid', 'profile-stop-invalid', 'profile-initialize-invalid', 'profile-tools-invalid'];
 const RESPONSE_FLAGS = ['present', 'jsonrpcValid', 'idMatches', 'rpcError', 'resultPresent',
   'toolIsError', 'structuredPresent', 'contentMatches'];
 const RESOURCE_FLAGS = ['newRecords', 'pending', 'ownerMatches', 'directoryReady',
@@ -53,6 +55,7 @@ const RECOVERY_FLAGS = ['uniqueRecord', 'cleaned', 'runMatches', 'invocationMatc
 const RECOVERY_CODES = [...RESOURCE_CODES, 'ESRCH', 'EBUSY', 'ETIMEDOUT', 'ENOSPC'];
 const BASELINE_FLAGS = ['uniqueRecord', 'pending', 'ownerMatches', 'identityMatches',
   'mountsRetained', 'mountsCommitted', 'snapshotMounted'];
+const PROFILE_FLAGS = ['serverMatches', 'toolsArray', 'scriptPresent', 'agentPresent', 'toolsMatch'];
 
 function projectResourceInventory(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -206,6 +209,15 @@ function projectAcceptanceCheck(value) {
       || !['started', 'passed', 'failed'].includes(value.status)) return undefined;
   const result = { step: value.step, phase: value.phase, status: value.status };
   if (CHECK_REASONS.includes(value.reason)) result.reason = value.reason;
+  if (['script-only', 'agent-only'].includes(value.step)) {
+    if (RECOVERY_CODES.includes(value.code)) result.code = value.code;
+    if (value.profile && typeof value.profile === 'object') {
+      result.profile = {};
+      for (const key of PROFILE_FLAGS) {
+        if (typeof value.profile[key] === 'boolean') result.profile[key] = value.profile[key];
+      }
+    }
+  }
   if (value.step === 'crash-recovery') {
     if (RECOVERY_CODES.includes(value.code)) result.code = value.code;
     if (['disconnected', 'returned'].includes(value.interrupted)) result.interrupted = value.interrupted;

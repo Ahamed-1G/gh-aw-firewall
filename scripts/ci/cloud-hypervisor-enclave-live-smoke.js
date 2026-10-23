@@ -102,20 +102,28 @@ async function acceptanceCheck(context, step, phase, action) {
   try {
     const result = await action();
     const requestId = { 'agent-enospc': 6, 'script-enospc': 7, 'guest-oom': 8,
-      'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11 }[step];
-    record('passed', phase === 'request' ? mcpResponseMetadata(result, requestId)
-      : phase === 'resource-refresh' ? { inventory: result?.inventory, baseline: result?.baseline }
-        : ['resource-discovery', 'resource-read'].includes(phase) ? { inventory: result?.inventory }
-        : step === 'crash-recovery' && phase === 'recovery-validation' ? { recovery: result }
-          : step === 'crash-recovery' && phase === 'tools-list' ? mcpResponseMetadata(result, 13)
-            : step === 'crash-recovery' && phase === 'interrupted-response' ? {
-              ...mcpResponseMetadata(result?.response, 12),
-              interrupted: result?.disconnected ? 'disconnected' : 'returned',
-            } : {});
+      'guest-failure': 9, 'guest-timeout': 10, 'guest-cancellation': 11,
+      'script-only': 16, 'agent-only': 19 }[step];
+    let details = {};
+    if (phase === 'request') details = mcpResponseMetadata(result, requestId);
+    else if (phase === 'resource-refresh') details = { inventory: result?.inventory, baseline: result?.baseline };
+    else if (['resource-discovery', 'resource-read'].includes(phase)) details = { inventory: result?.inventory };
+    else if (step === 'crash-recovery' && phase === 'recovery-validation') details = { recovery: result };
+    else if (step === 'crash-recovery' && phase === 'tools-list') details = mcpResponseMetadata(result, 13);
+    else if (step === 'crash-recovery' && phase === 'interrupted-response') {
+      details = { ...mcpResponseMetadata(result?.response, 12),
+        interrupted: result?.disconnected ? 'disconnected' : 'returned' };
+    } else if (['script-only', 'agent-only'].includes(step)) {
+      if (phase === 'initialize') details = mcpResponseMetadata(result, requestId - 2);
+      else if (phase === 'tools-list') details = mcpResponseMetadata(result, requestId - 1);
+      else if (['initialize-validation', 'tools-validation'].includes(phase)) details = { profile: result };
+    }
+    record('passed', details);
     return result;
   } catch (error) {
     record('failed', {
-      ...(step === 'crash-recovery' ? { code: typeof error?.code === 'string' ? error.code : 'unknown' } : {}),
+      ...(['crash-recovery', 'script-only', 'agent-only'].includes(step)
+        ? { code: typeof error?.code === 'string' ? error.code : 'unknown' } : {}),
       ...(mcpFailures.get(error) || { reason: 'operation-failed' }),
     });
     throw error;
@@ -1946,14 +1954,35 @@ function assertUnifiedProfiles(artifacts, primaryManifest, enclaveManifest, encl
   }
 }
 
-function assertProfileTools(response, profile) {
+function assertProfileInitialize(response, requestId) {
+  const profile = { serverMatches: response?.result?.serverInfo?.name === 'awmg-awf-enclave' };
+  if (!profile.serverMatches) {
+    const error = mcpFailure('profile-initialize-invalid', response, requestId);
+    mcpFailures.get(error).profile = profile;
+    throw error;
+  }
+  return profile;
+}
+
+function assertProfileTools(response, profile, requestId) {
   const expected = profile === 'script-only' ? ['enclave_run_script']
     : profile === 'agent-only' ? ['enclave_run_agent']
       : ['enclave_run_agent', 'enclave_run_script'];
-  const names = response?.result?.tools?.map((tool) => tool.name).sort();
-  if (!isDeepStrictEqual(names, expected)) {
-    throw new Error(`Live ${profile} enclave profile did not expose exactly its configured executors`);
+  const tools = response?.result?.tools;
+  const names = Array.isArray(tools) ? tools.map(tool => tool?.name).sort() : undefined;
+  const checks = {
+    toolsArray: Array.isArray(tools),
+    scriptPresent: names?.includes('enclave_run_script') || false,
+    agentPresent: names?.includes('enclave_run_agent') || false,
+    toolsMatch: isDeepStrictEqual(names, expected),
+  };
+  if (!checks.toolsMatch) {
+    const error = mcpFailure('profile-tools-invalid', response, requestId);
+    error.message = `Live ${profile} enclave profile did not expose exactly its configured executors`;
+    mcpFailures.get(error).profile = checks;
+    throw error;
   }
+  return checks;
 }
 
 function spawnAwf(awfArguments, environment, stdoutFile, stderrFile, stage) {
@@ -2574,69 +2603,91 @@ async function main(failureContext = { stage: FAILURE_STAGES.RUNNER }) {
     for (const profile of ['script-only', 'agent-only']) {
       failureContext.stage = profile === 'script-only'
         ? FAILURE_STAGES.SCRIPT_ONLY : FAILURE_STAGES.AGENT_ONLY;
-      fs.writeFileSync(path.join(workspace, '.awf-enclave-live-stop'), 'done\n', { mode: 0o644 });
-      await stopAwf(awf);
-      if (awf.exitCode !== 0 || awf.signalCode !== null) {
-        throw new Error('Combined profile did not stop cleanly before isolated profile acceptance');
-      }
+      await acceptanceCheck(failureContext, profile, 'stop-marker',
+        () => fs.writeFileSync(path.join(workspace, '.awf-enclave-live-stop'), 'done\n', { mode: 0o644 }));
+      await acceptanceCheck(failureContext, profile, 'host-stop', () => stopAwf(awf));
+      await acceptanceCheck(failureContext, profile, 'host-stop-validation', () => {
+        if (awf.exitCode !== 0 || awf.signalCode !== null) throw mcpFailure('profile-stop-invalid');
+      });
       awf = undefined;
-      fs.rmSync(path.join(workspace, '.awf-enclave-live-stop'));
-      workDir = path.join(root, `awf-work-${profile}`);
-      awfConfigPath = path.join(root, `awf-config-${profile}.json`);
-      runDirectories.push(workDir);
-      writeAwfConfig(workDir, awfConfigPath, profile);
-      awf = launchAwf(profile, profile);
+      await acceptanceCheck(failureContext, profile, 'stop-marker-remove',
+        () => fs.rmSync(path.join(workspace, '.awf-enclave-live-stop')));
+      await acceptanceCheck(failureContext, profile, 'profile-config', () => {
+        workDir = path.join(root, `awf-work-${profile}`);
+        awfConfigPath = path.join(root, `awf-config-${profile}.json`);
+        runDirectories.push(workDir);
+        writeAwfConfig(workDir, awfConfigPath, profile);
+      });
+      await acceptanceCheck(failureContext, profile, 'profile-launch', () => {
+        awf = launchAwf(profile, profile);
+      });
       const diagnostics = {
         stage: profile, stderrFile: awfErr,
         startupErrorFile: path.join(workDir, 'proxy-logs', 'awf-startup-error.json'),
       };
-      await waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, diagnostics);
-      await waitForHostGatewayReadiness(awf, Date.now() + 150_000, diagnostics);
+      await acceptanceCheck(failureContext, profile, 'broker-readiness',
+        () => waitForBroker(awf, 'awf-enclave-mcp-server', Date.now() + 15 * 60_000, diagnostics));
+      await acceptanceCheck(failureContext, profile, 'gateway-readiness',
+        () => waitForHostGatewayReadiness(awf, Date.now() + 150_000, diagnostics));
       const profileStage = failureContext.stage;
       failureContext.stage = FAILURE_STAGES.PRIMARY;
-      primaryVmResidue = await waitForPrimaryVmReadiness(
-        awf, Date.now() + 5 * 60_000, diagnostics,
-      );
+      primaryVmResidue = await acceptanceCheck(failureContext, profile, 'primary-readiness',
+        () => waitForPrimaryVmReadiness(awf, Date.now() + 5 * 60_000, diagnostics));
       failureContext.stage = profileStage;
       const requestId = profile === 'script-only' ? 14 : 17;
-      const profileInit = await requestMcp(endpoint, gatewayKey, requestId, 'initialize', {
-        protocolVersion: '2025-11-25',
-        capabilities: {},
-        clientInfo: { name: 'awf-live-enclave-conformance', version: '1.0.0' },
-      });
-      if (profileInit?.result?.serverInfo?.name !== 'awmg-awf-enclave') {
-        throw new Error(`Live ${profile} profile did not route through the public broker`);
-      }
-      assertProfileTools(await requestMcp(endpoint, gatewayKey, requestId + 1, 'tools/list', {}), profile);
+      const profileInit = await acceptanceCheck(failureContext, profile, 'initialize',
+        () => requestMcp(endpoint, gatewayKey, requestId, 'initialize', {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'awf-live-enclave-conformance', version: '1.0.0' },
+        }));
+      await acceptanceCheck(failureContext, profile, 'initialize-validation',
+        () => assertProfileInitialize(profileInit, requestId));
+      const profileTools = await acceptanceCheck(failureContext, profile, 'tools-list',
+        () => requestMcp(endpoint, gatewayKey, requestId + 1, 'tools/list', {}));
+      await acceptanceCheck(failureContext, profile, 'tools-validation',
+        () => assertProfileTools(profileTools, profile, requestId + 1));
       if (profile === 'script-only') {
-        const response = await requestMcp(endpoint, gatewayKey, requestId + 2, 'tools/call', {
-          name: 'enclave_run_script',
-          arguments: { privateRepo: 'github/gh-aw-firewall', schema: scriptProbe.schema, script: python },
-        });
-        assertExpectedToolResult(response, requestId + 2, scriptProbe.expected, 'script-only profile');
+        const response = await acceptanceCheck(failureContext, profile, 'request',
+          () => requestMcp(endpoint, gatewayKey, requestId + 2, 'tools/call', {
+            name: 'enclave_run_script',
+            arguments: { privateRepo: 'github/gh-aw-firewall', schema: scriptProbe.schema, script: python },
+          }));
+        await acceptanceCheck(failureContext, profile, 'result-validation',
+          () => assertExpectedToolResult(response, requestId + 2, scriptProbe.expected, 'script-only profile'));
       } else {
-        const response = await requestMcp(endpoint, gatewayKey, requestId + 2, 'tools/call', {
-          name: 'enclave_run_agent',
-          arguments: {
-            privateRepo: 'github/gh-aw-firewall',
-            schema: { type: 'enum', values: [agentResultValue] },
-            prompt: `Return exactly the string ${JSON.stringify(agentResultValue)}. Do not inspect or quote repository files.`,
-          },
-        });
-        assertExpectedToolResult(response, requestId + 2, agentResultValue, 'agent-only profile');
+        const response = await acceptanceCheck(failureContext, profile, 'request',
+          () => requestMcp(endpoint, gatewayKey, requestId + 2, 'tools/call', {
+            name: 'enclave_run_agent',
+            arguments: {
+              privateRepo: 'github/gh-aw-firewall',
+              schema: { type: 'enum', values: [agentResultValue] },
+              prompt: `Return exactly the string ${JSON.stringify(agentResultValue)}. Do not inspect or quote repository files.`,
+            },
+          }));
+        await acceptanceCheck(failureContext, profile, 'result-validation',
+          () => assertExpectedToolResult(response, requestId + 2, agentResultValue, 'agent-only profile'));
       }
-      await waitForVmCleanup(15_000, primaryVmResidue);
-      const privateRoot = path.join(
-        '/var/tmp',
-        `awf-enclave-private-0-${crypto.createHash('sha256')
-          .update(path.resolve(workDir), 'utf8').digest('hex').slice(0, 20)}`,
-      );
-      assertNoSentinelLeak([
-        path.join(workDir, 'audit'), path.join(workDir, 'proxy-logs'),
-        path.join(privateRoot, 'audit'), path.join(privateRoot, 'api-proxy-logs'),
-        journalRoot,
-      ], [fs.readFileSync(awfOut, 'utf8'), fs.readFileSync(awfErr, 'utf8'),
-        ...captureContainerLogs()], sentinel);
+      await acceptanceCheck(failureContext, profile, 'cleanup',
+        () => waitForVmCleanup(15_000, primaryVmResidue));
+      const profileStdout = await acceptanceCheck(failureContext, profile, 'stdout-read',
+        () => fs.readFileSync(awfOut, 'utf8'));
+      const profileStderr = await acceptanceCheck(failureContext, profile, 'stderr-read',
+        () => fs.readFileSync(awfErr, 'utf8'));
+      const profileContainerLogs = await acceptanceCheck(failureContext, profile, 'container-logs',
+        () => captureContainerLogs());
+      await acceptanceCheck(failureContext, profile, 'output-redaction', () => {
+        const privateRoot = path.join(
+          '/var/tmp',
+          `awf-enclave-private-0-${crypto.createHash('sha256')
+            .update(path.resolve(workDir), 'utf8').digest('hex').slice(0, 20)}`,
+        );
+        assertNoSentinelLeak([
+          path.join(workDir, 'audit'), path.join(workDir, 'proxy-logs'),
+          path.join(privateRoot, 'audit'), path.join(privateRoot, 'api-proxy-logs'),
+          journalRoot,
+        ], [profileStdout, profileStderr, ...profileContainerLogs], sentinel);
+      });
     }
     acceptancePassed = true;
     console.log('Live combined, script-only, and agent-only profile invocations, guest identity/network, resource limits, failure/timeout/cancellation, VMM crash recovery, cleanup, and output redaction checks passed.');
@@ -2813,6 +2864,7 @@ module.exports = {
   makeConfig,
   toAwfConfig,
   assertProfileTools,
+  assertProfileInitialize,
   assertNoSentinelLeak,
   assertExpectedToolResult,
   assertRecoveredInvocation,

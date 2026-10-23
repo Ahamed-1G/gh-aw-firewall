@@ -87,7 +87,8 @@ const harness = require(harnessPath) as {
   RELEASE_ASSETS: string[];
   assertReleaseAssets(required: string[], published: string[]): void;
   assertUnifiedProfiles(artifacts: unknown, primary: unknown, enclave: unknown, sbom: unknown): void;
-  assertProfileTools(response: unknown, profile: string): void;
+  assertProfileTools(response: unknown, profile: string, requestId?: number): Record<string, boolean>;
+  assertProfileInitialize(response: unknown, requestId: number): Record<string, boolean>;
   assertNoSentinelLeak(directories: string[], logs: string[], sentinel: string): void;
   assertExpectedToolResult(response: unknown, requestId: number, expected: unknown, label: string): void;
   assertNoSuccessfulResult(response: unknown): void;
@@ -1072,7 +1073,7 @@ describe('Cloud Hypervisor enclave live acceptance harness', () => {
     const source = fs.readFileSync(harnessPath, 'utf8');
     expect(source).toContain("for (const profile of ['script-only', 'agent-only'])");
     expect(source).toContain("writeAwfConfig(workDir, awfConfigPath, profile)");
-    expect(source).toContain("await waitForHostGatewayReadiness(awf, Date.now() + 150_000, diagnostics)");
+    expect(source).toContain("waitForHostGatewayReadiness(awf, Date.now() + 150_000, diagnostics)");
     expect(source).toContain("assertExpectedToolResult(response, requestId + 2, scriptProbe.expected, 'script-only profile')");
     expect(source).toContain("assertExpectedToolResult(response, requestId + 2, agentResultValue, 'agent-only profile')");
   });
@@ -2026,6 +2027,121 @@ describe('bounded MCP acceptance check diagnostics', () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
+  });
+});
+
+describe('single-executor profile acceptance diagnostics', () => {
+  const sentinel = 'PRIVATE_PROFILE_PAYLOAD_/private/path';
+  const phases = [
+    'stop-marker', 'host-stop', 'host-stop-validation', 'stop-marker-remove',
+    'profile-config', 'profile-launch', 'broker-readiness', 'gateway-readiness', 'primary-readiness',
+    'initialize', 'initialize-validation', 'tools-list', 'tools-validation',
+    'request', 'result-validation', 'cleanup', 'stdout-read', 'stderr-read', 'container-logs', 'output-redaction',
+  ];
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(['script-only', 'agent-only'])('wires each %s operation through the shared checkpoint guard', () => {
+    const source = fs.readFileSync(harnessPath, 'utf8');
+    const block = source.slice(source.indexOf("for (const profile of ['script-only', 'agent-only'])"),
+      source.indexOf('acceptancePassed = true;'));
+    for (const phase of phases) expect(block).toContain(`acceptanceCheck(failureContext, profile, '${phase}'`);
+    expect(block.match(/acceptanceCheck\(failureContext, profile, 'request'/g)).toHaveLength(2);
+    expect(block.match(/acceptanceCheck\(failureContext, profile, 'result-validation'/g)).toHaveLength(2);
+    expect(block.indexOf("'initialize-validation'")).toBeGreaterThan(block.indexOf("'initialize'"));
+    expect(block.indexOf("'tools-validation'")).toBeGreaterThan(block.indexOf("'tools-list'"));
+    expect(block.indexOf("'result-validation'")).toBeGreaterThan(block.indexOf("'request'"));
+    expect(block.indexOf("'output-redaction'")).toBeGreaterThan(block.indexOf("'cleanup'"));
+  });
+
+  it.each(['script-only', 'agent-only'].flatMap(profile => phases.map(phase => [profile, phase])))(
+    'preserves the exact %s/%s failure and suppresses raw details', async (profile, phase) => {
+      const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+      const failure = Object.assign(new Error(sentinel), { code: 'EIO' });
+      await expect(harness.acceptanceCheck(context, profile, phase, () => { throw failure; })).rejects.toBe(failure);
+      await harness.acceptanceCheck(context, profile, 'cleanup', () => undefined);
+      expect(context.check).toEqual({ step: profile, phase, status: 'failed', reason: 'operation-failed', code: 'EIO' });
+      expect(context.checks?.slice(-1)[0]).toEqual({ step: profile, phase: 'cleanup', status: 'passed' });
+      expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+    },
+  );
+
+  it.each([['script-only', 14], ['agent-only', 17]] as const)(
+    'retains response shape and fixed server/tool flags for %s', async (profile, id) => {
+      const context: { check?: Record<string, unknown>; checks?: Array<Record<string, unknown>> } = {};
+      const response = { jsonrpc: '2.0', id, result: { serverInfo: { name: 'awmg-awf-enclave', private: sentinel } } };
+      await harness.acceptanceCheck(context, profile, 'initialize', () => response);
+      expect(context.check).toMatchObject({ response: { present: true, jsonrpcValid: true, idMatches: true } });
+      await harness.acceptanceCheck(context, profile, 'initialize-validation',
+        () => harness.assertProfileInitialize(response, id));
+      expect(context.check).toMatchObject({ profile: { serverMatches: true } });
+      const tools = { jsonrpc: '2.0', id: id + 1, result: {
+        tools: [{ name: profile === 'script-only' ? 'enclave_run_script' : 'enclave_run_agent', description: sentinel }],
+      } };
+      await harness.acceptanceCheck(context, profile, 'tools-list', () => tools);
+      expect(context.check).toMatchObject({ response: { idMatches: true } });
+      await harness.acceptanceCheck(context, profile, 'tools-validation',
+        () => harness.assertProfileTools(tools, profile, id + 1));
+      expect(context.check).toMatchObject({ profile: {
+        toolsArray: true, scriptPresent: profile === 'script-only', agentPresent: profile === 'agent-only',
+        toolsMatch: true,
+      } });
+      const result = { jsonrpc: '2.0', id: id + 2, result: {
+        structuredContent: { status: 'ok', result: sentinel },
+        content: [{ type: 'text', text: JSON.stringify({ status: 'ok', result: sentinel }) }],
+      } };
+      await harness.acceptanceCheck(context, profile, 'request', () => result);
+      expect(context.check).toMatchObject({ response: {
+        idMatches: true, contentMatches: true, structuredStatus: 'ok',
+      } });
+      expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+    },
+  );
+
+  it.each(['script-only', 'agent-only'])('names a wrong broker server for %s without exporting its name', async profile => {
+    const context: { check?: Record<string, unknown> } = {};
+    const response = { jsonrpc: '2.0', id: 14, result: { serverInfo: { name: sentinel } } };
+    await expect(harness.acceptanceCheck(context, profile, 'initialize-validation',
+      () => harness.assertProfileInitialize(response, 14))).rejects.toThrow();
+    expect(context.check).toMatchObject({
+      reason: 'profile-initialize-invalid', profile: { serverMatches: false }, response: { idMatches: true },
+    });
+    expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+  });
+
+  it.each(['both', 'missing', 'unknown', 'duplicate', 'malformed'])(
+    'diagnoses %s tool declarations without exporting untrusted names', async kind => {
+      const names = kind === 'both' ? ['enclave_run_script', 'enclave_run_agent']
+        : kind === 'missing' ? [] : kind === 'duplicate' ? ['enclave_run_script', 'enclave_run_script'] : [sentinel];
+      const response = { jsonrpc: '2.0', id: 15, result: {
+        tools: kind === 'malformed' ? sentinel : names.map(name => ({ name, description: sentinel })),
+      } };
+      const context: { check?: Record<string, unknown> } = {};
+      await expect(harness.acceptanceCheck(context, 'script-only', 'tools-validation',
+        () => harness.assertProfileTools(response, 'script-only', 15))).rejects.toThrow();
+      expect(context.check).toMatchObject({
+        reason: 'profile-tools-invalid', profile: { toolsMatch: false, toolsArray: kind !== 'malformed' },
+        response: { idMatches: true },
+      });
+      expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
+    },
+  );
+
+  it('retains a canonical result mismatch without exporting either result', async () => {
+    const context: { check?: Record<string, unknown> } = {};
+    const result = { status: 'ok', result: sentinel };
+    const response = { jsonrpc: '2.0', id: 16, result: {
+      structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }],
+    } };
+    await expect(harness.acceptanceCheck(context, 'script-only', 'result-validation',
+      () => harness.assertExpectedToolResult(response, 16, true, 'script-only profile'))).rejects.toThrow();
+    expect(context.check).toMatchObject({ reason: 'result-mismatch', response: {
+      idMatches: true, structuredStatus: 'ok', contentMatches: true,
+    } });
+    expect(JSON.stringify([context, jest.mocked(console.log).mock.calls])).not.toContain(sentinel);
   });
 });
 

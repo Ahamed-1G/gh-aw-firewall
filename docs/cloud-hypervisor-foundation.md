@@ -1553,6 +1553,21 @@ errors, paths, identifiers or payloads. These guards produce a controlled failed
 acceptance result; they do not ignore a recovery failure, resume interrupted
 work, change recovery policy or allow a false success.
 
+Both single-executor profile runs use the same bounded acceptance checkpoints.
+They distinguish stop-marker creation, host shutdown and exit validation,
+marker removal, configuration and launch, broker/gateway/primary readiness,
+MCP initialization and broker-server validation, tool listing and exact-tool
+validation, invocation and canonical-result validation, resource cleanup,
+stdout/stderr/container-log reads, and output-redaction scanning. Initialization,
+tool-list and invocation diagnostics retain response-shape facts with the
+matching request identity. Broker identity and tool validation expose only fixed
+booleans: expected server, array-shaped tool list, script/agent tool presence,
+and exact expected-tool match. Unexpected names, descriptions, results and raw
+errors are never published. The first failed operation remains available after
+later cleanup/history entries and independent upload reprojection. These
+diagnostics preserve the existing profile, result, cleanup and redaction
+requirements rather than treating an opaque profile failure as success.
+
 Resource discovery reports raw-entry, regular-file, resource-suffix and valid-name
 count buckets before applying the new-record, owner and readiness filters.
 Missing or unreadable directories are explicit inventory failures, never empty

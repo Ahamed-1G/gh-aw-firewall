@@ -150,6 +150,38 @@ describe('public enclave conformance diagnostic retention', () => {
     expect(records()).not.toMatch(/PRIVATE_TOKEN|23456/);
   });
 
+  it.each(['script-only', 'agent-only'])(
+    'retains the first %s failure and fixed tool flags through independent upload reprojection', profile => {
+      const context = prepare();
+      const check = {
+        step: profile, phase: 'tools-validation', status: 'failed', reason: 'profile-tools-invalid', code: 'EIO',
+        profile: { serverMatches: true, toolsArray: true, scriptPresent: true, agentPresent: true, toolsMatch: false,
+          tools: [secret], name: secret, [secret]: true },
+        response: { present: true, idMatches: true, body: secret },
+        message: secret,
+      };
+      diagnostics.collect(context, { status: 'failed', check, checks: [
+        check,
+        ...Array(20).fill({ step: profile, phase: 'cleanup', status: 'passed', private: secret }),
+      ] });
+      const summary = JSON.parse(fs.readFileSync(path.join(output, 'upload/acceptance.json'), 'utf8'));
+      expect(summary.check).toEqual({
+        step: profile, phase: 'tools-validation', status: 'failed', reason: 'profile-tools-invalid', code: 'EIO',
+        profile: { serverMatches: true, toolsArray: true, scriptPresent: true, agentPresent: true, toolsMatch: false },
+        response: { present: true, idMatches: true },
+      });
+      expect(summary.checks).toHaveLength(16);
+      expect(summary.checks.every((value: { phase: string; status: string }) =>
+        value.phase === 'cleanup' && value.status === 'passed')).toBe(true);
+      expect(diagnostics.projectAcceptanceCheck(summary.check)).toEqual(summary.check);
+      expect(diagnostics.projectAcceptanceCheck({
+        step: profile, phase: 'initialize-validation', status: 'failed', reason: secret, code: secret,
+        profile: { serverMatches: secret, toolsArray: 1, [secret]: true },
+      })).toEqual({ step: profile, phase: 'initialize-validation', status: 'failed', profile: {} });
+      expect(records()).not.toContain(secret);
+    },
+  );
+
   it('retains only finite publication and discovery facts across upload reprojection', () => {
     const context = prepare();
     const file = invocation('script');
