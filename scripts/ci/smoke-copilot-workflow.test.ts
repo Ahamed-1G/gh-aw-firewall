@@ -42,6 +42,7 @@ const copilotInstallerWorkflows = [
     'smoke-cloud-hypervisor',
     'smoke-otel-tracing',
     'smoke-services',
+    'test-coverage-improver',
   ].map(name => ({ name, file: `${name}.md` })),
 ];
 
