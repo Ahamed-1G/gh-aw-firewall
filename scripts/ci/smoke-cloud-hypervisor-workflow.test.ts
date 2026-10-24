@@ -108,7 +108,7 @@ describe('Copilot Cloud Hypervisor smoke compatibility', () => {
 
     expect(frontmatter.engine?.id).toBe('copilot');
     expect(frontmatter.engine?.version).toBeUndefined();
-    expect(lock.split('\n', 1)[0]).toContain('"copilot":"1.0.98"');
+    expect(lock.split('\n', 1)[0]).toContain('"copilot":"1.0.101"');
     expect(frontmatter.sandbox?.agent?.config?.filesystem?.['allow-write'])
       .toEqual(['/tmp/gh-aw/aw_info.json']);
     expect(lock).toContain(

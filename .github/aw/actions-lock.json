@@ -65,15 +65,15 @@
       "version": "v10.3.2",
       "sha": "07a047e608db84b3d8c06cd9a7c7dcc9c355c18e"
     },
-    "github/gh-aw-actions/setup-cli@v0.93.0": {
+    "github/gh-aw-actions/setup-cli@v0.93.3": {
       "repo": "github/gh-aw-actions/setup-cli",
-      "version": "v0.93.0",
-      "sha": "e7519e6442ef74dda80a1627315ad827f402309c"
+      "version": "v0.93.3",
+      "sha": "e89a5670dc4c790b37ade361215b8d72d8ce8942"
     },
-    "github/gh-aw-actions/setup@v0.93.0": {
+    "github/gh-aw-actions/setup@v0.93.3": {
       "repo": "github/gh-aw-actions/setup",
-      "version": "v0.93.0",
-      "sha": "e7519e6442ef74dda80a1627315ad827f402309c"
+      "version": "v0.93.3",
+      "sha": "e89a5670dc4c790b37ade361215b8d72d8ce8942"
     }
   },
   "containers": {
@@ -957,15 +957,15 @@
       "digest": "sha256:70e6a5ec2ec963c4cd0c0c822c892ce34db489213745f6c6ea5dc0def3339f44",
       "pinned_image": "ghcr.io/github/gh-aw-mcpg:v0.4.19@sha256:70e6a5ec2ec963c4cd0c0c822c892ce34db489213745f6c6ea5dc0def3339f44"
     },
-    "ghcr.io/github/gh-aw-mcpg:v0.4.35": {
-      "image": "ghcr.io/github/gh-aw-mcpg:v0.4.35",
-      "digest": "sha256:35e28671836380c0eae52660ea2ad7e5f6659f63cb20d1abae9271656c670858",
-      "pinned_image": "ghcr.io/github/gh-aw-mcpg:v0.4.35@sha256:35e28671836380c0eae52660ea2ad7e5f6659f63cb20d1abae9271656c670858"
-    },
     "ghcr.io/github/gh-aw-mcpg:v0.4.36": {
       "image": "ghcr.io/github/gh-aw-mcpg:v0.4.36",
       "digest": "sha256:b4d2856018959c798b3e3f81ae4ab5b275e06354e123e1f7971de931f2f450f2",
       "pinned_image": "ghcr.io/github/gh-aw-mcpg:v0.4.36@sha256:b4d2856018959c798b3e3f81ae4ab5b275e06354e123e1f7971de931f2f450f2"
+    },
+    "ghcr.io/github/gh-aw-mcpg:v0.4.37": {
+      "image": "ghcr.io/github/gh-aw-mcpg:v0.4.37",
+      "digest": "sha256:9c7f242f6dec2d7d7b55d4c9e07872d59b85377c6cb3de46c915a5d1ffb91442",
+      "pinned_image": "ghcr.io/github/gh-aw-mcpg:v0.4.37@sha256:9c7f242f6dec2d7d7b55d4c9e07872d59b85377c6cb3de46c915a5d1ffb91442"
     },
     "ghcr.io/github/gh-aw-node": {
       "image": "ghcr.io/github/gh-aw-node",
