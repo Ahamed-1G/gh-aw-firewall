@@ -53,26 +53,26 @@ RUN gh --version | grep -qE '^gh version 2\.98\.0'
 # Install pinned npm and its patched bundled dependencies in one layer so the
 # vulnerable upstream copies are not retained in an earlier image layer.
 RUN set -eux; \
-    NPM_TGZ_URL="https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"; \
-    NPM_TGZ_SHA256="73f6155215ebabf4ed96dca1f567c2372cc713c33af2e5b9b62fde4e92373e2e"; \
-    curl -fsSL "$NPM_TGZ_URL" -o /tmp/npm-11.18.0.tgz; \
-    echo "${NPM_TGZ_SHA256}  /tmp/npm-11.18.0.tgz" | sha256sum -c -; \
+    NPM_TGZ_URL="https://registry.npmjs.org/npm/-/npm-12.2.1.tgz"; \
+    NPM_TGZ_SHA256="228bd64aaef23270dbdbd2cf3d5ef5c467602ef38c4066246cef1984adab9a67"; \
+    curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 "$NPM_TGZ_URL" -o /tmp/npm-12.2.1.tgz; \
+    echo "${NPM_TGZ_SHA256}  /tmp/npm-12.2.1.tgz" | sha256sum -c -; \
     rm -rf /usr/local/lib/node_modules/npm; \
     mkdir -p /usr/local/lib/node_modules/npm; \
-    tar -xzf /tmp/npm-11.18.0.tgz -C /usr/local/lib/node_modules/npm --strip-components=1; \
+    tar -xzf /tmp/npm-12.2.1.tgz -C /usr/local/lib/node_modules/npm --strip-components=1; \
     chmod +x /usr/local/lib/node_modules/npm/bin/npm-cli.js \
              /usr/local/lib/node_modules/npm/bin/npx-cli.js; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
-    npm --version | grep -qE '^11\.18\.0' || (echo "ERROR: npm 11.18.0 not installed" && exit 1); \
+    npm --version | grep -qE '^12\.2\.1' || (echo "ERROR: npm 12.2.1 not installed" && exit 1); \
     npm_dir=/usr/local/lib/node_modules/npm/node_modules; \
-    curl -fsSL https://registry.npmjs.org/undici/-/undici-6.28.1.tgz -o /tmp/undici-6.28.1.tgz; \
+    curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 https://registry.npmjs.org/undici/-/undici-6.28.1.tgz -o /tmp/undici-6.28.1.tgz; \
     echo "e18191aac9c0ff43dac7fe9b10b7041a22d07addb7b66a6e8ac14a52a5b69b74  /tmp/undici-6.28.1.tgz" | sha256sum -c -; \
-    curl -fsSL https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz -o /tmp/brace-expansion-5.0.12.tgz; \
+    curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz -o /tmp/brace-expansion-5.0.12.tgz; \
     echo "ef8448ec78f20b692f04fa6d01f39b5ab34c66404bea3429f5a39c6c9e0be8b4  /tmp/brace-expansion-5.0.12.tgz" | sha256sum -c -; \
-    curl -fsSL https://registry.npmjs.org/ip-address/-/ip-address-10.7.4.tgz -o /tmp/ip-address-10.7.4.tgz; \
+    curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 https://registry.npmjs.org/ip-address/-/ip-address-10.7.4.tgz -o /tmp/ip-address-10.7.4.tgz; \
     echo "f9e1d0dd369c002f43770c6ee35942c8078e76d080a1e18e89113eef865f26ff  /tmp/ip-address-10.7.4.tgz" | sha256sum -c -; \
-    curl -fsSL https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-7.1.6.tgz -o /tmp/postcss-selector-parser-7.1.6.tgz; \
+    curl -fsSL --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-7.1.6.tgz -o /tmp/postcss-selector-parser-7.1.6.tgz; \
     echo "48c903f98c5591d8d26f16f389d5cb3435459474c645209a79f6241bf4b657b6  /tmp/postcss-selector-parser-7.1.6.tgz" | sha256sum -c -; \
     rm -rf "$npm_dir/undici" "$npm_dir/brace-expansion" "$npm_dir/ip-address" "$npm_dir/postcss-selector-parser"; \
     mkdir -p "$npm_dir/undici" "$npm_dir/brace-expansion" "$npm_dir/ip-address" "$npm_dir/postcss-selector-parser"; \
@@ -81,7 +81,7 @@ RUN set -eux; \
     tar -xzf /tmp/ip-address-10.7.4.tgz -C "$npm_dir/ip-address" --strip-components=1; \
     tar -xzf /tmp/postcss-selector-parser-7.1.6.tgz -C "$npm_dir/postcss-selector-parser" --strip-components=1; \
     node -e 'const root="/usr/local/lib/node_modules/npm/node_modules"; const expected={undici:"6.28.1","brace-expansion":"5.0.12","ip-address":"10.7.4","postcss-selector-parser":"7.1.6"}; for (const [name, version] of Object.entries(expected)) { const actual=require(`${root}/${name}/package.json`).version; if (actual !== version) throw new Error(`${name}: expected ${version}, got ${actual}`); }'; \
-    rm -f /tmp/npm-11.18.0.tgz /tmp/undici-6.28.1.tgz /tmp/brace-expansion-5.0.12.tgz /tmp/ip-address-10.7.4.tgz /tmp/postcss-selector-parser-7.1.6.tgz
+    rm -f /tmp/npm-12.2.1.tgz /tmp/undici-6.28.1.tgz /tmp/brace-expansion-5.0.12.tgz /tmp/ip-address-10.7.4.tgz /tmp/postcss-selector-parser-7.1.6.tgz
 
 # Create app directory
 WORKDIR /app
