@@ -188,7 +188,7 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
 
   it('pins the CLI verified against the compiler harness and invokes that staged binary', () => {
     const frontmatter = yaml.load(source.split('---')[1]) as {
-      engine: { id: string; version: string };
+      engine: { id: string; version: string; 'checksums-sha256': string };
     };
     const compiled = yaml.load(lock) as {
       jobs: Record<string, {
@@ -202,10 +202,13 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     const harnessCommand =
       '"${RUNNER_TEMP}/gh-aw/actions/copilot_harness.cjs" "${RUNNER_TEMP}/gh-aw/bin/copilot"';
 
-    expect(frontmatter.engine).toMatchObject({ id: 'copilot', version: '1.0.96' });
+    const checksum = '94a4663eac3bc0b9ffd60c5cceb35ef6c09037cb7619f0d5dfeff275b359ca97';
+    expect(frontmatter.engine).toMatchObject({
+      id: 'copilot', version: '1.0.96', 'checksums-sha256': checksum,
+    });
     expect(agent.env?.GH_AW_ENGINE_VERSION).toBe('1.0.96');
     expect(install?.run).toBe(
-      'bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.96'
+      `bash "\${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.96 --checksums-sha256 ${checksum}`
     );
     expect(lock).toContain('"engine_versions":{"copilot":"1.0.96"}');
     expect(lock).toContain(`"compiler_version":"${compilerVersion}"`);
@@ -399,6 +402,7 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
       step.name === 'Validate enclave invocation and result');
     expect(validateStep?.if).toBe('always()');
     expect(compiledValidateStep?.if).toBe('always()');
+    expect(compiledValidateStep?.run?.trim()).toBe(validateStep?.run?.trim());
     expect(validateStep?.run).toContain('record.kind === "failure"');
     expect(validateStep?.run).toContain('record.type === "report_missing_data"');
     expect(validateStep?.run).toContain('record.type === "report_missing_tool"');
@@ -504,7 +508,13 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
   });
 
   it('pins the published AWF and its attested artifacts to the same release', () => {
-    expect(lock).toContain('install_awf_binary.sh" v0.28.66');
+    const checksum = 'f184f3993a1f0c3168d0dd96b01752670a5061c9c9bc1a37e3653fc6b54fba29';
+    const frontmatter = yaml.load(source.split('---')[1]) as {
+      sandbox: { agent: { version: string; 'checksums-sha256': string } };
+    };
+    expect(frontmatter.sandbox.agent).toMatchObject({
+      version: 'v0.28.66', 'checksums-sha256': checksum,
+    });
     expect(lock).toContain('GH_AW_AWF_VERSION: v0.28.66');
     expect(lock).toContain('https://github.com/github/gh-aw-firewall/releases/download/v0.28.66/awf-config.schema.json');
     expect(lock).toContain('Download and verify cloud-hypervisor enclave artifacts');
@@ -512,6 +522,9 @@ describe('experimental Cloud Hypervisor enclave smoke workflow', () => {
     const compiled = yaml.load(lock) as {
       jobs: { agent: { steps: Array<{ name?: string; if?: string; run?: string; uses?: string }> } };
     };
+    expect(compiled.jobs.agent.steps.find(step => step.name === 'Install AWF binary')?.run).toBe(
+      `bash "\${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.28.66 --checksums-sha256 ${checksum}`
+    );
     const branchSteps = compiled.jobs.agent.steps.filter(step =>
       ['Setup Node.js', 'Install awf dependencies', 'Build awf', 'Install awf binary (local)'].includes(step.name ?? ''));
     expect(branchSteps).toHaveLength(4);
@@ -817,6 +830,19 @@ pathlib.Path("/query/out").write_text(json.dumps(result), encoding="utf-8")`);
     const patched = applyGeneralWorkflowPatches(lock, workflowPath).content;
     expect(patched).toBe(lock);
     expect(patched).toContain('--container-runtime cloud-hypervisor');
+  });
+
+  it('restores the reviewed AWF manifest pin dropped by the enclave compiler', () => {
+    const pin = ' --checksums-sha256 f184f3993a1f0c3168d0dd96b01752670a5061c9c9bc1a37e3653fc6b54fba29';
+    const unpinned = lock.replace(pin, '');
+    expect(unpinned).not.toBe(lock);
+    expect(applyGeneralWorkflowPatches(unpinned, workflowPath).content).toBe(lock);
+    const differentPin = ` --checksums-sha256 ${'a'.repeat(64)}`;
+    const alreadyPinned = lock.replace(pin, differentPin);
+    expect(applyGeneralWorkflowPatches(alreadyPinned, workflowPath).content).toBe(alreadyPinned);
+    const otherRelease = unpinned.replace('install_awf_binary.sh" v0.28.66',
+      'install_awf_binary.sh" v0.28.67');
+    expect(applyGeneralWorkflowPatches(otherRelease, workflowPath).content).toBe(otherRelease);
   });
 
   it('adds the host staging-token exclusion to the primary agent command', () => {
