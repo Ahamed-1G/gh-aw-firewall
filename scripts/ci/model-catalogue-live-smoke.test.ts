@@ -6,6 +6,7 @@ import { Script } from 'node:vm';
 import * as os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { validateWithSchema } from '../../src/schema-validator';
+import { generateSquidConfig } from '../../src/squid-config';
 
 jest.mock('node:child_process', () => ({ spawnSync: jest.fn(), spawn: jest.fn() }));
 
@@ -13,6 +14,7 @@ const {
   RELEASE, config, failureCode, projectCatalogue, waitForCatalogue,
   selectModel, assertAccounting, assertNetwork, publication, inference, bundledPricing,
   downloadRelease, exercise, observeStartup, validateExecutionContext, readExecutionContext,
+  DENIAL_RULE, deniedPolicy, prepareDeniedCompose, installDeniedDockerWrapper, verifyDeniedPolicy,
 } = require('./model-catalogue-live-smoke.cjs');
 
 const revision = 'a'.repeat(64);
@@ -37,7 +39,7 @@ const summary = '1 packets captured\n1 packets received by filter\n0 packets dro
 const emptySummary = '0 packets captured\n0 packets received by filter\n0 packets dropped by kernel\n';
 const denial = '1.000 172.30.0.30:45000 - -:0 1.1 CONNECT 403 TCP_DENIED:HIER_NONE api.github.com:443 "node"';
 
-function executionFixture(branch = 'lpcox-fix-catalogue-smoke-startup', eventName = 'workflow_dispatch') {
+function executionFixture(branch = 'lpcox-fix-catalogue-denial-smoke', eventName = 'workflow_dispatch') {
   const sha = 'd'.repeat(40);
   const ref = `refs/heads/${branch}`;
   const env: Record<string, string> = {
@@ -57,6 +59,105 @@ function executionFixture(branch = 'lpcox-fix-catalogue-smoke-startup', eventNam
 }
 
 describe('released model catalogue smoke', () => {
+  it('injects only a fixed source, CONNECT, catalogue host and TLS port denial before trusted-sidecar allowance', () => {
+    const original = generateSquidConfig({
+      domains: ['example.invalid'], blockedDomains: ['api.github.com'], port: 3128,
+      apiProxyIp: '172.30.0.30', apiProxyPorts: [10000, 10001, 10002, 10003],
+    });
+    expect(original.indexOf('http_access allow from_api_proxy'))
+      .toBeLessThan(original.indexOf('http_access deny blocked_domains'));
+    const encoded = Buffer.from(original).toString('base64');
+    const policy = deniedPolicy(encoded);
+    const injected = Buffer.from(policy.encoded, 'base64').toString();
+    expect(injected).toBe(DENIAL_RULE + original);
+    expect(DENIAL_RULE.split('\n')).toEqual([
+      '# Test-injected catalogue denial; not normal AWF sidecar policy.',
+      'acl catalogue_smoke_source src 172.30.0.30/32',
+      'acl catalogue_smoke_connect method CONNECT',
+      'acl catalogue_smoke_host dstdomain api.github.com',
+      'acl catalogue_smoke_port port 443',
+      'http_access deny catalogue_smoke_source catalogue_smoke_connect catalogue_smoke_host catalogue_smoke_port',
+      '',
+    ]);
+    expect(policy.identity).toMatchObject({
+      kind: 'test_injected_squid_deny', source: '172.30.0.30/32',
+      method: 'CONNECT', authority: 'api.github.com:443',
+    });
+    expect(JSON.stringify(policy.identity)).not.toContain(original);
+    for (const value of [undefined, 'not base64', Buffer.from('unknown policy').toString('base64'), policy.encoded]) {
+      expect(() => deniedPolicy(value)).toThrow('denial_policy_invalid');
+    }
+  });
+
+  it('stages the deny-only Compose override before forwarding real Docker startup and verifies running policy', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalogue-smoke-deny-test-'));
+    let descriptor: number | undefined;
+    const work = path.join(root, 'work');
+    fs.mkdirSync(work, { mode: 0o700 });
+    const original = 'acl from_api_proxy src 172.30.0.30/32\nhttp_access allow from_api_proxy\n';
+    const encoded = Buffer.from(original).toString('base64');
+    const generated = { services: { 'squid-proxy': {
+      image: RELEASE.images.squid, environment: { AWF_SQUID_CONFIG_B64: encoded },
+    } } };
+    const docker = path.join(root, 'real-docker');
+    fs.writeFileSync(path.join(work, 'docker-compose.yml'), JSON.stringify(generated), { mode: 0o600 });
+    fs.writeFileSync(docker, `#!${process.execPath}\n` +
+      'const fs = require("node:fs");\n' +
+      'if (process.argv.includes("config")) process.stdout.write(fs.readFileSync(process.argv[process.argv.indexOf("-f")+1]));\n' +
+      'else { if (!fs.existsSync("docker-compose.override.yml")) process.exit(9); process.stdout.write(JSON.stringify(process.argv.slice(2))); }\n',
+    { mode: 0o700 });
+    const exec = childProcess.spawnSync as jest.Mock;
+    exec.mockImplementation((command: string, args: string[]) => {
+      if (command === 'which') return { status: 0, stdout: docker };
+      if (args[0] === 'exec') return { status: 0, stdout: DENIAL_RULE + original };
+      return { status: 0, stdout: JSON.stringify(generated) };
+    });
+    try {
+      const wrapper = installDeniedDockerWrapper(root, work);
+      const actual = jest.requireActual<typeof childProcess>('node:child_process');
+      const result = actual.spawnSync(path.join(root, 'deny-bin', 'docker'), ['compose', 'up', '-d'], {
+        cwd: work, encoding: 'utf8', env: { ...process.env, PATH: wrapper.path }, timeout: 10000,
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('["compose","up","-d"]');
+      const file = path.join(work, 'docker-compose.override.yml');
+      descriptor = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW);
+      expect(fs.fstatSync(descriptor).isFile()).toBe(true);
+      expect(fs.fstatSync(descriptor).mode & 0o777).toBe(0o600);
+      const override = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+      expect(Object.keys(override.services)).toEqual(['squid-proxy']);
+      expect(Object.keys(override.services['squid-proxy'])).toEqual(['environment']);
+      const injected = deniedPolicy(encoded).encoded;
+      const info = { Id: 'squid-fixture', Config: { Env: [`AWF_SQUID_CONFIG_B64=${injected}`] } };
+      expect(verifyDeniedPolicy(info, work, docker).verified_running).toBe(true);
+      expect(() => verifyDeniedPolicy({ ...info, Config: { Env: [`AWF_SQUID_CONFIG_B64=${encoded}`] } },
+        work, docker)).toThrow('denial_policy_not_running');
+      exec.mockImplementation((_command: string, args: string[]) =>
+        ({ status: 0, stdout: args[0] === 'exec' ? original : JSON.stringify(generated) }));
+      expect(() => verifyDeniedPolicy(info, work, docker)).toThrow('denial_policy_not_running');
+      expect(() => prepareDeniedCompose(work, docker)).toThrow('denial_policy_invalid');
+      fs.ftruncateSync(descriptor, 0);
+      fs.writeSync(descriptor, '{"tampered":true}', 0, 'utf8');
+      const rejected = actual.spawnSync(path.join(root, 'deny-bin', 'docker'), ['compose', 'up', '-d'], {
+        cwd: work, encoding: 'utf8', env: process.env, timeout: 10000,
+      });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toBe('');
+      expect(rejected.stderr).toBe('Catalogue smoke denied-policy staging failed: denial_policy_invalid\n');
+      fs.unlinkSync(file);
+      fs.symlinkSync(docker, file);
+      const symlinkRejected = actual.spawnSync(path.join(root, 'deny-bin', 'docker'), ['compose', 'up', '-d'], {
+        cwd: work, encoding: 'utf8', env: process.env, timeout: 10000,
+      });
+      expect(symlinkRejected.status).toBe(1);
+      expect(symlinkRejected.stdout).toBe('');
+      expect(symlinkRejected.stderr).toBe('Catalogue smoke denied-policy staging failed: denial_policy_invalid\n');
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('pins one released binary and all matching infrastructure images', () => {
     expect(RELEASE.version).toBe('0.28.75');
     expect(RELEASE.binarySha256).toBe('796e3c5d46f54f2c2c45a68afbbf5368dd70666341e08052cbefe7d8fd766946');
@@ -171,6 +272,111 @@ describe('released model catalogue smoke', () => {
     expect(() => assertNetwork('denied', packet.replace('172.30.0.10.3128', '1.1.1.1.443'), summary, denial)).toThrow('unexpected_direct_network_attempt');
     expect(() => assertNetwork('denied', packet, summary.replace('0 packets dropped', '1 packets dropped'), denial)).toThrow('network_capture_dropped');
     expect(() => assertNetwork('denied', packet, '', denial)).toThrow('network_capture_dropped');
+  });
+
+  it('retains only diagnostic counters before rejecting TLS-guard status or actual alternate traffic', () => {
+    const observation: Record<string, unknown> = {};
+    const guardDenial = denial.replace('CONNECT 403', 'CONNECT 200');
+    expect(() => assertNetwork('denied', packet, summary, guardDenial, observation))
+      .toThrow('unexpected_catalogue_failover');
+    expect(observation).toMatchObject({
+      denied_catalogue_requests: 0, squid_403_denials: 0, logged_200_tcp_denied: 1,
+      verified_tlsguard_200_denied: 0, terminal_catalogue_denial: false,
+      alternate_tcp_destinations: 0, alternate_squid_destinations: 0, unexpected_squid_requests: 0,
+    });
+    const sentinel = 'SECRET_SENTINEL_DO_NOT_UPLOAD';
+    expect(() => assertNetwork('denied', packet, summary,
+      denial.replace('api.github.com:443', `${sentinel}.example:443`), observation))
+      .toThrow('unexpected_catalogue_failover');
+    expect(observation).toMatchObject({ denied_catalogue_requests: 0, alternate_squid_destinations: 1 });
+    expect(JSON.stringify(observation)).not.toContain(sentinel);
+    expect(() => assertNetwork('denied', packet.replace('172.30.0.10.3128', '1.1.1.1.443'),
+      summary, denial, observation)).toThrow('unexpected_direct_network_attempt');
+    expect(observation.alternate_tcp_destinations).toBe(1);
+    expect(() => assertNetwork('denied', packet, summary, denial.replace('TCP_DENIED', 'TCP_TUNNEL'),
+      observation)).toThrow('unexpected_catalogue_failover');
+    expect(observation.unexpected_squid_requests).toBe(1);
+  });
+
+  it('accepts released TLS-guard CONNECT200 only as verified terminal denial, never as actual403', () => {
+    const policy = { kind: 'test_injected_squid_deny', source: '172.30.0.30/32',
+      method: 'CONNECT', authority: 'api.github.com:443', verified_running: true, tls_guard_enabled: true };
+    const guardDenial = '1792950000.123 172.30.0.30:45000 api.github.com -:0 1.1 CONNECT 200 ' +
+      'TCP_DENIED:HIER_NONE api.github.com:443 "node"';
+    expect(assertNetwork('denied', packet, summary, guardDenial, {}, policy)).toMatchObject({
+      squid_403_denials: 0, logged_200_tcp_denied: 1, verified_tlsguard_200_denied: 1,
+      denied_catalogue_requests: 1, terminal_catalogue_denial: true,
+      alternate_squid_destinations: 0, alternate_tcp_destinations: 0,
+    });
+    for (const unverified of [undefined, {}, { ...policy, verified_running: false },
+      { ...policy, tls_guard_enabled: false }, { ...policy, tls_guard_enabled: undefined },
+      { ...policy, kind: 'normal_policy' }, { ...policy, source: '172.30.0.31/32' },
+      { ...policy, method: 'GET' }, { ...policy, authority: 'other.example:443' }]) {
+      expect(() => assertNetwork('denied', packet, summary, guardDenial, {}, unverified)).toThrow();
+    }
+    for (const invalid of [
+      guardDenial.replace('TCP_DENIED:HIER_NONE', 'TCP_TUNNEL:HIER_DIRECT'),
+      guardDenial.replace('TCP_DENIED:HIER_NONE', 'TCP_DENIED:HIER_DIRECT'),
+      guardDenial.replace('TCP_DENIED:HIER_NONE', 'TCP_DENIED_ABORTED:HIER_NONE'),
+      guardDenial.replace('CONNECT 200', 'GET 200'),
+      guardDenial.replace('CONNECT 200', 'CONNECT 503'),
+      guardDenial.replace('api.github.com:443', 'sub.api.github.com:443'),
+      guardDenial.replace('api.github.com:443', 'api.github.com:80'),
+      guardDenial.replace('172.30.0.30:', '172.30.0.31:'),
+      'malformed 172.30.0.30:45000',
+    ]) {
+      expect(() => assertNetwork('denied', packet, summary, invalid, {}, policy)).toThrow();
+    }
+    const mixed: Record<string, unknown> = {};
+    expect(() => assertNetwork('denied', packet, summary, `${guardDenial}\n${guardDenial.replace(
+      'TCP_DENIED:HIER_NONE', 'TCP_TUNNEL:HIER_DIRECT')}`, mixed, policy))
+      .toThrow('unexpected_catalogue_failover');
+    expect(mixed).toMatchObject({ squid_requests: 2, denied_catalogue_requests: 1,
+      terminal_catalogue_denial: false, unexpected_squid_requests: 1 });
+    expect(() => assertNetwork('offline', '', emptySummary, guardDenial, {}, policy))
+      .toThrow('offline_feed_request');
+    expect(() => assertNetwork('denied', packet.replace('172.30.0.10.3128', '1.1.1.1.443'),
+      summary, guardDenial, {}, policy)).toThrow('unexpected_direct_network_attempt');
+    expect(() => assertNetwork('denied', packet, summary.replace('0 packets dropped', '1 packets dropped'),
+      guardDenial, {}, policy)).toThrow('network_capture_dropped');
+  });
+
+  it('verifies complete running policy and actual TLS-guard settings before authorizing its log shape', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalogue-smoke-guard-test-'));
+    const generated = generateSquidConfig({
+      domains: ['example.invalid'], blockedDomains: ['api.github.com'], port: 3128,
+      apiProxyIp: '172.30.0.30', apiProxyPorts: [10000, 10001, 10002, 10003],
+    });
+    const exec = childProcess.spawnSync as jest.Mock;
+    function fixture(original: string, mutate: (value: string) => string = value => value) {
+      const encoded = Buffer.from(original).toString('base64');
+      const policy = deniedPolicy(encoded);
+      fs.writeFileSync(path.join(root, 'docker-compose.override.yml'),
+        JSON.stringify({ services: { 'squid-proxy': { environment: { AWF_SQUID_CONFIG_B64: policy.encoded } } } }),
+      { mode: 0o600 });
+      const actual = mutate(Buffer.from(policy.encoded, 'base64').toString('utf8'));
+      exec.mockImplementation((_command: string, args: string[]) => ({ status: 0,
+        stdout: args[0] === 'exec' ? actual : JSON.stringify({ services: { 'squid-proxy': {
+          image: RELEASE.images.squid, environment: { AWF_SQUID_CONFIG_B64: encoded },
+        } } }) }));
+      return { Id: 'squid-fixture', Config: { Env: [`AWF_SQUID_CONFIG_B64=${policy.encoded}`] } };
+    }
+    try {
+      expect(verifyDeniedPolicy(fixture(generated), root, 'docker').tls_guard_enabled).toBe(true);
+      expect(verifyDeniedPolicy(fixture(generated, value => value.split('\n')
+        .filter(line => !line.startsWith('http_port [::]:')).join('\n')), root, 'docker').tls_guard_enabled).toBe(true);
+      for (const disabled of [
+        generated.replace('http_port 3128 ssl-bump', 'http_port 3128'),
+        generated.replace('acl tls_sni_guard_api_proxy src 172.30.0.30/32', ''),
+        generated.replace('ssl_bump splice tls_sni_guard_api_proxy', ''),
+      ]) {
+        expect(verifyDeniedPolicy(fixture(disabled), root, 'docker').tls_guard_enabled).toBe(false);
+      }
+      expect(() => verifyDeniedPolicy(fixture(generated, value => value.replace('http_port 3128 ssl-bump',
+        'http_port 3128')), root, 'docker')).toThrow('denial_policy_not_running');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('never projects arbitrary reflection, accounting, or exception data into evidence', () => {
@@ -317,7 +523,8 @@ describe('released model catalogue smoke', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalogue-smoke-startup-test-'));
     const previousUmask = process.umask(0o022);
     const sentinel = 'SECRET_SENTINEL_DO_NOT_UPLOAD';
-    (childProcess.spawnSync as jest.Mock).mockReturnValue({ status: 0, stdout: '' });
+    (childProcess.spawnSync as jest.Mock).mockImplementation((command: string) =>
+      ({ status: 0, stdout: command === 'which' ? process.execPath : '' }));
     (childProcess.spawn as jest.Mock).mockImplementation((command: string, args: string[], options: {
       env: Record<string, string>; stdio: string[];
     }) => {
@@ -329,6 +536,8 @@ describe('released model catalogue smoke', () => {
         queueMicrotask(() => child.stderr.emit('data', Buffer.from('listening on any')));
       } else {
         const work = args[args.indexOf('--work-dir') + 1];
+        expect(fs.existsSync(path.join(path.dirname(work), 'deny-bin'))).toBe(work.includes('/denied/'));
+        expect(options.env.PATH?.includes('deny-bin')).toBe(work.includes('/denied/'));
         expect(fs.statSync(work).mode & 0o777).toBe(0o700);
         expect(fs.statSync(path.dirname(work)).mode & 0o777).toBe(0o700);
         expect(options.stdio).toEqual(['ignore', 'ignore', 'pipe']);
@@ -385,7 +594,7 @@ describe('released model catalogue smoke', () => {
 
   it('accepts normal main execution and only the exact reviewed manual repair tuple', () => {
     for (const [branch, eventName] of [['main', 'push'], ['main', 'workflow_dispatch'],
-      ['lpcox-fix-catalogue-smoke-startup', 'workflow_dispatch']]) {
+      ['lpcox-fix-catalogue-denial-smoke', 'workflow_dispatch']]) {
       const fixture = executionFixture(branch, eventName);
       if (branch === 'main') delete fixture.event.inputs;
       expect(validateExecutionContext(fixture.env, fixture.event, fixture.checkoutSha)).toEqual({
@@ -523,7 +732,7 @@ describe('released model catalogue smoke', () => {
         type: 'string', required: false,
       } },
     });
-    expect(workflow.jobs.smoke.if).toContain("github.ref == 'refs/heads/lpcox-fix-catalogue-smoke-startup'");
+    expect(workflow.jobs.smoke.if).toContain("github.ref == 'refs/heads/lpcox-fix-catalogue-denial-smoke'");
     expect(workflow.jobs.smoke.if).toContain("inputs.reviewed_head_sha != '' && inputs.reviewed_head_sha == github.sha");
     const jobAllowed = (fixture: ReturnType<typeof executionFixture>) => new Script(workflow.jobs.smoke.if)
       .runInNewContext({
@@ -535,9 +744,10 @@ describe('released model catalogue smoke', () => {
     const mainManual = executionFixture('main');
     delete mainManual.event.inputs;
     expect(jobAllowed(mainManual)).toBe(true);
-    for (const fixture of [executionFixture('other'), executionFixture('lpcox-fix-catalogue-smoke-startup', 'push'),
-      executionFixture('lpcox-fix-catalogue-smoke-startup', 'pull_request'),
-      executionFixture('lpcox-fix-catalogue-smoke-startup', 'workflow_run')]) {
+    for (const fixture of [executionFixture('other'), executionFixture('lpcox-fix-catalogue-smoke-startup'),
+      executionFixture('lpcox-fix-catalogue-denial-smoke', 'push'),
+      executionFixture('lpcox-fix-catalogue-denial-smoke', 'pull_request'),
+      executionFixture('lpcox-fix-catalogue-denial-smoke', 'workflow_run')]) {
       expect(jobAllowed(fixture)).toBe(false);
     }
     const missing = executionFixture();

@@ -21,6 +21,15 @@ const CACHE = '/tmp/catalogue-smoke-private';
 const COMMIT = /^[a-f0-9]{40}$/;
 const REVISION = /^[a-f0-9]{64}$/;
 const MODELS = ['claude-haiku-4.5', 'gpt-5-mini', 'claude-haiku-5.5'];
+const DENIAL_RULE = [
+  '# Test-injected catalogue denial; not normal AWF sidecar policy.',
+  'acl catalogue_smoke_source src 172.30.0.30/32',
+  'acl catalogue_smoke_connect method CONNECT',
+  'acl catalogue_smoke_host dstdomain api.github.com',
+  'acl catalogue_smoke_port port 443',
+  'http_access deny catalogue_smoke_source catalogue_smoke_connect catalogue_smoke_host catalogue_smoke_port',
+  '',
+].join('\n');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const PROBE_SCRIPT = `
 (async () => {
@@ -138,6 +147,7 @@ function failureCode(error) {
     'proxy_network_count', 'proxy_ip', 'proxy_not_internal', 'unexpected_ipv6',
     'cache_shared_mount', 'unexpected_operator_pricing', 'running_image_reference',
     'running_image_id', 'agent_credential_exposed', 'fallback_credentials_present',
+    'denial_policy_invalid', 'denial_policy_not_running',
   ]);
   return allowed.has(firstLine) ? firstLine : 'smoke_operation_failed';
 }
@@ -246,33 +256,58 @@ function assertAccounting(records, selection, catalogue) {
   };
 }
 
-function assertNetwork(mode, packets, captureSummary, squidLog) {
-  assert.match(captureSummary, /\b0 packets dropped by kernel\b/, 'network_capture_dropped');
+function assertNetwork(mode, packets, captureSummary, squidLog, observation = {}, denialPolicy = null) {
   const captured = captureSummary.match(/\b(\d+) packets? captured\b/);
   const received = captureSummary.match(/\b(\d+) packets? received by filter\b/);
-  assert.ok(captured && received, 'network_capture_incomplete');
+  const dropped = captureSummary.match(/\b(\d+) packets? dropped by kernel\b/);
   const lines = packets.trim() ? packets.trim().split('\n') : [];
+  const expectedPacket = / IP 172\.30\.0\.30\.\d+ > 172\.30\.0\.10\.3128: Flags \[S\]/;
+  const requests = squidLog.split('\n').filter(line => /\s172\.30\.0\.30:\d+\s/.test(line));
+  const parsed = requests.map(request => {
+    const fields = request.trim().split(/\s+/);
+    return { source: fields[1], method: fields[5], status: fields[6], decision: fields[7], authority: fields[8] };
+  });
+  const fixedRequest = request => /^172\.30\.0\.30:\d+$/.test(request.source || '') &&
+    request.method === 'CONNECT' && request.authority === 'api.github.com:443';
+  const denied = request => fixedRequest(request) && request.decision === 'TCP_DENIED:HIER_NONE';
+  const verifiedGuard = mode === 'denied' && denialPolicy?.verified_running === true &&
+    denialPolicy.tls_guard_enabled === true && denialPolicy.kind === 'test_injected_squid_deny' &&
+    denialPolicy.source === '172.30.0.30/32' && denialPolicy.method === 'CONNECT' &&
+    denialPolicy.authority === 'api.github.com:443';
+  const strict403 = parsed.filter(request => denied(request) && request.status === '403').length;
+  const logged200 = parsed.filter(request => denied(request) && request.status === '200').length;
+  Object.assign(observation, {
+    outbound_tcp_syns: lines.length, squid_requests: requests.length,
+    denied_catalogue_requests: strict403 + (verifiedGuard ? logged200 : 0),
+    squid_403_denials: strict403, logged_200_tcp_denied: logged200,
+    verified_tlsguard_200_denied: verifiedGuard ? logged200 : 0,
+    terminal_catalogue_denial: mode === 'denied' && requests.length > 0 &&
+      strict403 + (verifiedGuard ? logged200 : 0) === requests.length,
+    alternate_tcp_destinations: lines.filter(line => !expectedPacket.test(line)).length,
+    alternate_squid_destinations: parsed.filter(request => request.authority !== 'api.github.com:443').length,
+    unexpected_squid_requests: parsed.filter(request => !denied(request) ||
+      !['200', '403'].includes(request.status)).length,
+    kernel_drops: dropped && Number.isSafeInteger(Number(dropped[1])) ? Number(dropped[1]) : null,
+  });
+  assert.equal(observation.kernel_drops, 0, 'network_capture_dropped');
+  assert.ok(captured && received, 'network_capture_incomplete');
   assert.equal(Number(captured[1]), lines.length, 'network_capture_incomplete');
   assert.equal(Number(received[1]), lines.length, 'network_capture_incomplete');
   // tcpdump captures only initial outbound TCP SYNs; no payload or headers.
   for (const line of lines) {
-    assert.match(line, / IP 172\.30\.0\.30\.\d+ > 172\.30\.0\.10\.3128: Flags \[S\]/,
-      'unexpected_direct_network_attempt');
+    assert.match(line, expectedPacket, 'unexpected_direct_network_attempt');
   }
-  const requests = squidLog.split('\n').filter(line => /\s172\.30\.0\.30:\d+\s/.test(line));
   if (mode === 'offline') {
     assert.equal(lines.length, 0, 'offline_network_attempt');
     assert.equal(requests.length, 0, 'offline_feed_request');
   } else {
     assert.ok(lines.length > 0 && requests.length > 0, 'denial_not_observed');
-    for (const request of requests) {
-      assert.match(request, /\sCONNECT 403 TCP_DENIED:HIER_NONE api\.github\.com:443\s/,
+    for (const request of parsed) {
+      assert.ok(denied(request) && (request.status === '403' || (verifiedGuard && request.status === '200')),
         'unexpected_catalogue_failover');
     }
   }
-  return { outbound_tcp_syns: lines.length, squid_requests: requests.length,
-    denied_catalogue_requests: mode === 'denied' ? requests.length : 0,
-    alternate_tcp_destinations: 0, kernel_drops: 0 };
+  return observation;
 }
 
 function config(mode) {
@@ -285,6 +320,104 @@ function config(mode) {
         timeoutMs: 30000, refreshSeconds: 3600, cacheDirectory: CACHE } },
     container: { images: RELEASE.images, agentTimeout: 5 },
   };
+}
+
+function deniedPolicy(encoded) {
+  assert.ok(typeof encoded === 'string' && encoded.length <= 512 * 1024, 'denial_policy_invalid');
+  const original = Buffer.from(encoded, 'base64').toString('utf8');
+  assert.equal(Buffer.from(original).toString('base64'), encoded, 'denial_policy_invalid');
+  assert.ok(original.includes('acl from_api_proxy src 172.30.0.30/32\n') &&
+    original.includes('http_access allow from_api_proxy\n') &&
+    !original.includes('catalogue_smoke_'), 'denial_policy_invalid');
+  const injected = DENIAL_RULE + original;
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  return {
+    encoded: Buffer.from(injected).toString('base64'),
+    identity: {
+      kind: 'test_injected_squid_deny', source: '172.30.0.30/32',
+      method: 'CONNECT', authority: 'api.github.com:443',
+      rule_sha256: digest(DENIAL_RULE), generated_config_sha256: digest(original),
+      injected_config_sha256: digest(injected),
+    },
+  };
+}
+
+function generatedDeniedPolicy(workDir, docker) {
+  const compose = JSON.parse(run(docker, ['compose', '-f', path.join(workDir, 'docker-compose.yml'),
+    'config', '--format', 'json']));
+  const squid = compose.services?.['squid-proxy'];
+  assert.equal(squid?.image, RELEASE.images.squid, 'running_image_reference');
+  return deniedPolicy(squid.environment?.AWF_SQUID_CONFIG_B64);
+}
+
+function readDeniedOverride(file, failure) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const info = fs.fstatSync(descriptor);
+    assert.ok(info.isFile() && (info.mode & 0o777) === 0o600, failure);
+    return fs.readFileSync(descriptor, 'utf8');
+  } catch {
+    throw new Error(failure);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function prepareDeniedCompose(workDir, docker) {
+  assert.equal(fs.realpathSync(process.cwd()), fs.realpathSync(workDir), 'denial_policy_invalid');
+  const policy = generatedDeniedPolicy(workDir, docker);
+  const override = JSON.stringify({ services: { 'squid-proxy': {
+    environment: { AWF_SQUID_CONFIG_B64: policy.encoded },
+  } } });
+  const file = path.join(workDir, 'docker-compose.override.yml');
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT |
+      fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    fs.writeFileSync(descriptor, override);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    assert.equal(readDeniedOverride(file, 'denial_policy_invalid'), override, 'denial_policy_invalid');
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function installDeniedDockerWrapper(directory, workDir) {
+  const docker = run('which', ['docker']);
+  assert.ok(path.isAbsolute(docker), 'denial_policy_invalid');
+  const bin = path.join(directory, 'deny-bin');
+  fs.mkdirSync(bin, { mode: 0o700 });
+  const quote = value => `'${value.replace(/'/g, "'\\''")}'`;
+  const prepare = `const h = require(${JSON.stringify(__filename)}); try { h.prepareDeniedCompose(` +
+    `${JSON.stringify(workDir)}, ${JSON.stringify(docker)}); } catch (error) { ` +
+    `console.error('Catalogue smoke denied-policy staging failed: ' + h.failureCode(error)); process.exit(1); }`;
+  // Stage the deny-only override synchronously before forwarding the real startup.
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\n' +
+    'if [ "$1" = compose ] && [ "$2" = up ]; then\n' +
+    `  ${quote(process.execPath)} -e ${quote(prepare)} || exit "$?"\nfi\n` +
+    `exec ${quote(docker)} "$@"\n`, { mode: 0o700, flag: 'wx' });
+  return { docker, path: `${bin}${path.delimiter}${process.env.PATH}` };
+}
+
+function verifyDeniedPolicy(squidInfo, workDir, docker) {
+  const policy = generatedDeniedPolicy(workDir, docker);
+  const override = JSON.parse(readDeniedOverride(
+    path.join(workDir, 'docker-compose.override.yml'), 'denial_policy_not_running'));
+  assert.equal(override.services?.['squid-proxy']?.environment?.AWF_SQUID_CONFIG_B64,
+    policy.encoded, 'denial_policy_not_running');
+  assert.equal(squidInfo.Config.Env.find(entry => entry.startsWith('AWF_SQUID_CONFIG_B64=')),
+    `AWF_SQUID_CONFIG_B64=${policy.encoded}`, 'denial_policy_not_running');
+  const actual = run('docker', ['exec', squidInfo.Id, 'cat', '/etc/squid/squid.conf']);
+  const expected = Buffer.from(policy.encoded, 'base64').toString('utf8').trim();
+  // The released entrypoint removes only the dual-stack listener when IPv6 is disabled.
+  const ipv4Only = expected.split('\n').filter(line => !line.startsWith('http_port [::]:')).join('\n');
+  assert.ok(actual === expected || actual === ipv4Only, 'denial_policy_not_running');
+  const tlsGuard = /^http_port 3128 ssl-bump cert=\/var\/run\/squid\/awf-sni-guard-cert\.pem key=\/var\/run\/squid\/awf-sni-guard-key\.pem generate-host-certificates=off /m.test(actual) &&
+    /^acl tls_sni_guard_api_proxy src 172\.30\.0\.30\/32$/m.test(actual) &&
+    /^ssl_bump splice tls_sni_guard_api_proxy$/m.test(actual);
+  return { ...policy.identity, verified_running: true, tls_guard_enabled: tlsGuard };
 }
 
 function proxyScript(container, operation, params = {}) {
@@ -407,6 +540,9 @@ function observeStartup(child) {
       state.reason = 'work_directory_owner';
     } else if (plain === '[ERROR] \u274c --network-isolation requires a reachable Docker daemon, but none was found.') {
       state.reason = 'docker_unavailable';
+    } else if (plain === 'Catalogue smoke denied-policy staging failed: denial_policy_invalid' ||
+      plain === 'Catalogue smoke denied-policy staging failed: smoke_subprocess_failed') {
+      state.reason = 'denial_policy_staging';
     }
   };
   child.stderr.on('data', bytes => {
@@ -447,6 +583,8 @@ async function exercise(binary, root, mode, evidence) {
   const composeFile = path.join(workDir, 'docker-compose.yml');
   const compose = ['compose', '-f', composeFile];
   const env = { PATH: process.env.PATH, HOME: process.env.HOME };
+  const denial = mode === 'denied' ? installDeniedDockerWrapper(directory, workDir) : null;
+  if (denial) env.PATH = denial.path;
   for (const key of ['GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID',
     'GITHUB_RUN_ATTEMPT', 'GITHUB_WORKFLOW_REF']) {
     if (process.env[key]) env[key] = process.env[key];
@@ -480,6 +618,9 @@ async function exercise(binary, root, mode, evidence) {
     for (const [service, key] of [['api-proxy', 'apiProxy'], ['agent', 'agent'], ['squid-proxy', 'squid']]) {
       const id = run('docker', [...compose, 'ps', '--all', '-q', service]);
       const info = JSON.parse(run('docker', ['inspect', id]))[0];
+      if (service === 'squid-proxy' && denial) {
+        evidence.denial_policy = verifyDeniedPolicy(info, workDir, denial.docker);
+      }
       assert.equal(info.Config.Image, RELEASE.images[key], 'running_image_reference');
       assert.equal(info.Image, run('docker', ['image', 'inspect', '--format', '{{.Id}}', RELEASE.images[key]]),
         'running_image_id');
@@ -507,7 +648,8 @@ async function exercise(binary, root, mode, evidence) {
       captured = true;
       const squid = run('docker', [...compose, 'ps', '-q', 'squid-proxy']);
       const log = run('docker', ['exec', squid, 'cat', '/var/log/squid/access.log']);
-      evidence.network = assertNetwork(mode, network.packets, network.summary, log);
+      evidence.network = {};
+      assertNetwork(mode, network.packets, network.summary, log, evidence.network, evidence.denial_policy);
     }
     evidence.status = 'passed';
     evidence.phase = 'complete';
@@ -552,7 +694,7 @@ function validateExecutionContext(env, event, checkoutSha) {
   assert.equal(env.GITHUB_ACTIONS, 'true', 'approved_actions_only');
   assert.ok(['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME), 'trusted_event_only');
   const main = env.GITHUB_REF === 'refs/heads/main';
-  const repair = env.GITHUB_REF === 'refs/heads/lpcox-fix-catalogue-smoke-startup';
+  const repair = env.GITHUB_REF === 'refs/heads/lpcox-fix-catalogue-denial-smoke';
   assert.ok(main || repair, 'trusted_ref_only');
   assert.ok(main || env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'trusted_event_only');
   assert.match(env.GITHUB_SHA || '', COMMIT, 'trusted_event_metadata');
@@ -648,7 +790,8 @@ async function main() {
 
 module.exports = { RELEASE, config, failureCode, projectCatalogue, waitForCatalogue, selectModel,
   assertAccounting, assertNetwork, publication, inference, bundledPricing, downloadRelease, exercise, observeStartup,
-  validateExecutionContext, readExecutionContext };
+  validateExecutionContext, readExecutionContext, DENIAL_RULE, deniedPolicy, prepareDeniedCompose,
+  installDeniedDockerWrapper, verifyDeniedPolicy };
 if (require.main === module) main().catch(error => {
   console.error(`Model catalogue smoke failed: ${failureCode(error)}; raw diagnostics suppressed.`);
   process.exitCode = 1;
