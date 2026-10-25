@@ -12,6 +12,7 @@ name: Smoke Enclave Build Test
 engine:
   id: copilot
   version: 1.0.98
+  checksums-sha256: 018625eac68670d66ede904b9b82cdcd6ab8f87ba20e6e1fbdf0b62c8295d5be
   args: ["--allow-tool", "awf-enclave(enclave_run_script)"]
 network:
   allowed:

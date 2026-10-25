@@ -899,9 +899,9 @@ describe('smoke enclave build workflow', () => {
   const source = fs.readFileSync(sourcePath, 'utf8');
   const lock = fs.readFileSync(lockPath, 'utf8');
 
-  it('installs a checksum-reviewed CLI version above the generated feature minimum', () => {
+  it('installs the authored CLI version above the generated feature minimum with a verified checksum', () => {
     const frontmatter = yaml.load(source.split('---')[1]) as {
-      engine: { version: string };
+      engine: { version: string; 'checksums-sha256': string };
     };
     const compiled = yaml.load(lock) as {
       jobs: { agent: {
@@ -913,7 +913,10 @@ describe('smoke enclave build workflow', () => {
       step.name === 'Install GitHub Copilot CLI');
     const minimum = install?.env?.GH_AW_COPILOT_MIN_VERSION;
     // Reviewed by setup/sh/release_integrity.sh in the pinned gh-aw-actions revision.
-    expect(frontmatter.engine.version).toBe('1.0.98');
+    expect(frontmatter.engine).toMatchObject({
+      version: '1.0.98',
+      'checksums-sha256': '018625eac68670d66ede904b9b82cdcd6ab8f87ba20e6e1fbdf0b62c8295d5be',
+    });
     expect(lock).toContain('github/gh-aw-actions/setup@e7519e6442ef74dda80a1627315ad827f402309c');
     expect(compiled.jobs.agent.env.GH_AW_ENGINE_VERSION).toBe(frontmatter.engine.version);
     expect(minimum).toMatch(/^\d+\.\d+\.\d+$/);
@@ -921,7 +924,7 @@ describe('smoke enclave build workflow', () => {
     expect(frontmatter.engine.version.localeCompare(minimum!, 'en', { numeric: true }))
       .toBeGreaterThanOrEqual(0);
     expect(install?.run).toBe(
-      `bash "\${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" ${frontmatter.engine.version}`
+      `bash "\${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" ${frontmatter.engine.version} --checksums-sha256 ${frontmatter.engine['checksums-sha256']}`
     );
     expect(lock).toContain(`"engine_versions":{"copilot":"${frontmatter.engine.version}"}`);
   });
