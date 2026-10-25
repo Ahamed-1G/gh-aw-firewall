@@ -90,6 +90,21 @@ export function prepareChrootHomeMounts(config: WrapperConfig): void {
     logger.debug(`Prepared chroot home tool mountpoint: ${chrootToolPath} (${uid}:${gid})`);
   }
 
+  // Prepare these nested targets before Docker can create them as root-owned,
+  // but only when buildHomeMounts() will use the host .copilot bind.
+  const copilotHomeDir = path.join(effectiveHome, '.copilot');
+  let copilotHomeAccessible = true;
+  try {
+    fs.accessSync(copilotHomeDir, fs.constants.R_OK | fs.constants.W_OK);
+  } catch {
+    copilotHomeAccessible = false;
+  }
+  if (copilotHomeAccessible) {
+    for (const name of ['session-state', 'logs']) {
+      createMissingOwnedDirectorySegments(path.join(copilotHomeDir, name), uid, gid);
+    }
+  }
+
   // Source-side prep: this only applies when the config file explicitly names
   // a runner tool-cache source path that does not exist yet. Create that host
   // source so Docker has something real to bind-mount later.
