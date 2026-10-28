@@ -1,5 +1,5 @@
 ---
-description: Smoke test dynamic repository enclave delegation with mcpg v0.4.19+ controller and runtime admission
+description: Smoke test dynamic repository enclave delegation with mcpg v0.4.36 controller and runtime admission
 on:
   schedule: every 12h
   workflow_dispatch:
@@ -7,6 +7,7 @@ permissions:
   contents: read
   copilot-requests: write
 name: Smoke Enclave Dynamic Issues Read
+runs-on: ubuntu-24.04
 engine:
   id: copilot
   version: 1.0.80
@@ -58,7 +59,7 @@ sandbox:
     version: v0.28.14
     command: "sudo --preserve-env awf"
   mcp:
-    version: v0.4.19
+    version: v0.4.36
 strict: false
 steps:
   - name: Install AWF dependencies

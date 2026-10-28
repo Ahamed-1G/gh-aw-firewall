@@ -1282,6 +1282,16 @@ describe('smoke enclave dynamic issues workflow', () => {
   const source = fs.readFileSync(dynamicSourcePath, 'utf8');
   const lock = fs.readFileSync(dynamicLockPath, 'utf8');
 
+  it('pins the agent job to Ubuntu 24.04 for credential-preserving sudo', () => {
+    const frontmatter = yaml.load(source.split('---')[1]) as { 'runs-on': string };
+    const compiled = yaml.load(lock) as {
+      jobs: { agent: { 'runs-on': string } };
+    };
+
+    expect(frontmatter['runs-on']).toBe('ubuntu-24.04');
+    expect(compiled.jobs.agent['runs-on']).toBe('ubuntu-24.04');
+  });
+
   it('passes the pinned Copilot release checksum to the installer', () => {
     const frontmatter = yaml.load(source.split('---')[1]) as {
       engine: { version: string; 'checksums-sha256': string };
@@ -1321,8 +1331,8 @@ describe('smoke enclave dynamic issues workflow', () => {
     expect(lock).not.toContain('\\"repos\\":[{\\"repo\\":\\"github/gh-aw\\"');
   });
 
-  it('uses mcpg v0.4.19 with the delegation controller', () => {
-    expect(lock).toContain('ghcr.io/github/gh-aw-mcpg:v0.4.19');
+  it('uses mcpg v0.4.36 with the delegation controller', () => {
+    expect(lock).toContain('ghcr.io/github/gh-aw-mcpg:v0.4.36');
     expect(lock).toContain('AWF_ENCLAVE_GITHUB_DELEGATION_CONTROL_CAPABILITY=$(openssl rand -hex 32');
     expect(lock).toContain('AWF_ENCLAVE_GITHUB_DELEGATION_CONTROL_ENDPOINT="http://127.0.0.1:8090/internal/awf-enclave-mcp-control/github-repository-delegation-v1"');
     expect(lock).toContain(
@@ -1330,6 +1340,46 @@ describe('smoke enclave dynamic issues workflow', () => {
     );
     expect(lock).toContain('Install local AWF binary');
     expect(lock).toContain('--build-local');
+  });
+
+  it('accepts digest-pinned stdio images under the declared gateway schema', () => {
+    const frontmatter = yaml.load(source.split('---')[1]) as {
+      sandbox: { mcp: { version: string } };
+    };
+    const compiled = yaml.load(lock) as {
+      jobs: { agent: { steps: Array<{ name: string; run?: string }> } };
+    };
+    const gateway = compiled.jobs.agent.steps.find(step =>
+      step.name === 'Start MCP Gateway')?.run;
+    const image = 'ghcr.io/github/gh-aw-mcpg:v0.4.36';
+    const digest = 'sha256:b4d2856018959c798b3e3f81ae4ab5b275e06354e123e1f7971de931f2f450f2';
+    const pinned = `${image}@${digest}`;
+    expect(frontmatter.sandbox.mcp.version).toBe('v0.4.36');
+    expect(gateway).toContain(pinned);
+    expect(compiled.jobs.agent.steps.find(step =>
+      step.name === 'Download container images')?.run).toContain(pinned);
+    const manifest = JSON.parse(lock.match(/^# gh-aw-manifest: (.+)$/m)![1]) as {
+      containers: Array<{ image: string; digest: string; pinned_image: string }>;
+    };
+    expect(manifest.containers.filter(container => container.image === image))
+      .toEqual([{ image, digest, pinned_image: pinned }]);
+
+    // Container schema from github/gh-aw-mcpg v0.4.36 (github/gh-aw-mcpg#15212).
+    const compatible = new Ajv().compile({
+      type: 'string',
+      minLength: 1,
+      pattern: '^[a-zA-Z0-9][a-zA-Z0-9./_-]*(:([a-zA-Z0-9._-]+|latest))?(@sha256:[a-fA-F0-9]{64})?$',
+    });
+    const images = Array.from(gateway?.matchAll(/"container": "([^"]+)"/g) ?? [],
+      match => match[1]);
+    expect(images.some(value => value.startsWith('ghcr.io/github/gh-aw-node@sha256:')))
+      .toBe(true);
+    for (const value of images) {
+      expect(compatible(value)).toBe(true);
+      if (value.includes('@sha256:')) {
+        expect(compatible(value.replace('@sha256:', '@sha512:'))).toBe(false);
+      }
+    }
   });
 
   it('keeps the delegation envelope live for the job while bounding identity TTL', () => {
