@@ -80,7 +80,7 @@ export function applyGeneralWorkflowPatches(
   workflowPath: string
 ): PatchResult {
   const log: string[] = [];
-  const preparedSmokeImages = /(?:^|[/\\])smoke-copilot\.lock\.yml$/.test(workflowPath)
+  const preparedSmokeImages = /(?:^|[/\\])smoke-(?:copilot|services)\.lock\.yml$/.test(workflowPath)
     && content.includes('- name: Build local AWF smoke images\n');
   const preparedSmokeImageArgs =
     '--image-registry awf-smoke --image-tag "${AWF_SMOKE_IMAGE_TAG:?}" --skip-pull';
@@ -548,12 +548,24 @@ export function applyGeneralWorkflowPatches(
       );
       const localInstall = /^ {6}- name: Install awf binary \(local\)\n(?: {8}.*\n|\n)*/m;
       if (!preparation || !localInstall.test(content)) {
-        throw new Error('Smoke Copilot image preparation requires the local AWF install step');
+        throw new Error('Smoke image preparation requires the local AWF install step');
+      }
+      const preserveHelperStep =
+        '      - name: Preserve smoke image preparation helper\n' +
+        '        run: |\n' +
+        '          mkdir -p "${RUNNER_TEMP}/awf-smoke"\n' +
+        '          cp "${GITHUB_WORKSPACE}/scripts/ci/build-smoke-images.sh" "${RUNNER_TEMP}/awf-smoke/build-smoke-images.sh"\n';
+      if (!content.includes(preserveHelperStep)) {
+        const prCheckout = /^      - name: Checkout PR branch\n        id: checkout-pr\n/m;
+        if (!prCheckout.test(content)) {
+          throw new Error('Smoke image preparation requires the PR checkout step');
+        }
+        content = content.replace(prCheckout, `${preserveHelperStep}$&`);
       }
       content = content.replace(preparation[0], '');
       content = content.replace(localInstall, step => step + preparation[0]);
       content = content.replace(/--build-local\b/g, preparedSmokeImageArgs);
-      log.push('  Reused prepared PR images outside the Smoke Copilot execution budget');
+      log.push('  Reused prepared PR images outside the smoke execution budget');
     }
   }
 
