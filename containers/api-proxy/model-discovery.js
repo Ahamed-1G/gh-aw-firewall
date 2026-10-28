@@ -81,10 +81,13 @@ function getTierSortedModels(provider, models) {
  */
 function buildRequest(url, opts, timeoutMs) {
   const parsed = new URL(url);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Unsupported model discovery URL scheme; expected HTTP or HTTPS');
+  }
   const isHttps = parsed.protocol === 'https:';
   const mod = isHttps ? https : http;
   const reqOpts = {
-    hostname: parsed.hostname,
+    hostname: parsed.hostname.replace(/^\[|\]$/g, ''),
     port: parsed.port || (isHttps ? 443 : 80),
     path: parsed.pathname + parsed.search,
     method: opts.method,

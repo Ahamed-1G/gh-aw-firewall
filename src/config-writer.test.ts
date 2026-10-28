@@ -76,6 +76,39 @@ describe('writeConfigs', () => {
   });
 
   describe('network subnet override', () => {
+    it('writes proxy-only provider port exceptions in default isolation and its audit policy', async () => {
+      const { generateSquidConfig, generatePolicyManifest } = jest.requireMock('./squid-config');
+      await writeConfigs(buildWriteConfig(tempDir, {
+        enableApiProxy: true,
+        networkIsolation: true,
+        additionalEnv: { COPILOT_PROVIDER_BASE_URL: 'http://host.docker.internal:11434/v1' },
+      }));
+      const expected = {
+        apiProxyIp: '172.30.0.30',
+        apiProxyUpstreams: [{ hostname: 'host.docker.internal', port: 11434 }],
+      };
+      expect(generateSquidConfig).toHaveBeenCalledWith(expect.objectContaining(expected));
+      expect(generatePolicyManifest).toHaveBeenCalledWith(expect.objectContaining(expected));
+    });
+
+    it('redacts secret-backed custom-port exceptions from both audit snapshots', async () => {
+      const url = 'https://private-provider.example:8443/v1';
+      const { generateSquidConfig, generatePolicyManifest } = jest.requireMock('./squid-config');
+      generateSquidConfig.mockReturnValueOnce('# upstream private-provider.example:8443');
+      generatePolicyManifest.mockReturnValueOnce({ upstream: 'private-provider.example:8443' });
+      process.env.AWF_TEST_PRIVATE_BASE_URL = url;
+      await writeConfigs(buildWriteConfig(tempDir, {
+        enableApiProxy: true,
+        openaiBaseUrlEnv: 'AWF_TEST_PRIVATE_BASE_URL',
+        sensitiveAllowedDomains: [url],
+      }));
+      expect(fs.readFileSync(path.join(tempDir, 'squid.conf'), 'utf8')).toContain('private-provider.example');
+      for (const filename of ['squid.conf', 'policy-manifest.json']) {
+        expect(fs.readFileSync(path.join(tempDir, 'audit', filename), 'utf8'))
+          .not.toContain('private-provider.example');
+      }
+    });
+
     it('relocates the awf-net subnet and sidecar IPs passed to compose generation', async () => {
       await writeConfigs(buildWriteConfig(tempDir, { networkSubnet: '10.88.0.0/24' }));
 

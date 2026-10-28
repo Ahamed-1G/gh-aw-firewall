@@ -274,7 +274,7 @@ AWF settings MAY be supplied via config files, including stdin (`--config -`).
 - `apiProxy.auth.anthropicServiceAccountId` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_SERVICE_ACCOUNT_ID`)*
 - `apiProxy.auth.anthropicWorkspaceId` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_WORKSPACE_ID`)*
 - `apiProxy.auth.anthropicTokenUrl` → *(config-only; maps to `AWF_AUTH_ANTHROPIC_TOKEN_URL`)*
-- `apiProxy.targets.<provider>.host` → `--<provider>-api-target` *(except `antigravity.host`, which maps to the Gemini flag below). Accepts a bare hostname or a full URL; a bare hostname or explicit `https://` URL both dial the target over HTTPS on port 443 (the default), while an explicit `http://` URL dials it in cleartext on port 80 — matching the runner-side allowlist, which already adds an `http://`-scoped allowlist entry for such targets. Custom ports are not supported: `http://host` always dials port 80 and `https://host` always dials port 443.)*
+- `apiProxy.targets.<provider>.host` → `--<provider>-api-target` *(except `antigravity.host`, which maps to the Gemini flag below). Accepts a hostname with optional port or an HTTP(S) URL. Bare targets and explicit `https://` URLs use HTTPS, defaulting to port 443; explicit `http://` URLs use cleartext, defaulting to port 80. Explicit custom ports are preserved and receive exact upstream exceptions restricted to the trusted API-proxy source; agent port permissions are unchanged.)*
 - `apiProxy.targets.antigravity.host` → `--gemini-api-target`
 - `apiProxy.targets.copilot.extraHeaders` → *(config-only; non-sensitive supplemental BYOK headers, maps to `AWF_BYOK_EXTRA_HEADERS`)*
 - `apiProxy.targets.copilot.extraBodyFields` → *(config-only; non-sensitive supplemental BYOK body fields, maps to `AWF_BYOK_EXTRA_BODY_FIELDS`)*
@@ -822,12 +822,12 @@ A conforming implementation:
    any container starts.
 2. MUST require an absolute `https://` URL and MUST reject embedded credentials
    (`user:pass@`), query strings, fragments, malformed hosts, unsupported
-   schemes, and non-default ports (the sidecar connects on port 443).
+   schemes. Explicit HTTPS ports are preserved.
 3. MUST derive the host, `host:port`, and optional base path from the URL.
 4. MUST add the derived destination to the effective Squid policy without
    persisting it in repository configuration, and MUST keep it out of
    `allowedDomains` (it is carried in the sensitive allowlist instead).
-5. MUST configure the OpenAI api-proxy adapter with the derived host
+5. MUST configure the OpenAI api-proxy adapter with the derived host and port
    (`OPENAI_API_TARGET`) and base path (`OPENAI_API_BASE_PATH`); the derived
    values take precedence over `apiProxy.targets.openai.host`/`basePath`.
 6. MUST exclude the named variable from the primary agent environment, including
@@ -839,6 +839,16 @@ A conforming implementation:
 
 The same rules apply to agent and detection phases, which share this
 configuration path.
+
+Provider targets support explicit HTTP(S) ports, for example
+`COPILOT_PROVIDER_BASE_URL=http://host.docker.internal:11434/v1`.
+The scheme, port and `/v1` prefix are preserved for discovery and inference.
+Bare targets still default to HTTPS; unsupported URL schemes are rejected.
+Configured non-default upstream ports receive exact host/port Squid exceptions
+restricted to the trusted API-proxy source. They are not added to `Safe_ports`
+or opened to the agent, and do not require `allowHostPorts` or a change from
+default network isolation. Existing host reachability requirements still apply.
+Dangerous service ports remain blocked.
 
 ### 9.8 Claude Hosted Web Search and Fetch
 

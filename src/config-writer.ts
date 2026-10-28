@@ -26,6 +26,8 @@ import {
   resolveSensitivePaths,
 } from './sensitive-paths';
 import { writeSensitivePathAudit } from './sensitive-path-audit';
+import { resolveApiProxyUpstreams } from './api-proxy-upstream-endpoints';
+import type { ApiProxyUpstream } from './types/squid';
 
 // When bundled with esbuild, this global is replaced at build time with the
 // JSON content of containers/agent/seccomp-profile.json.  In normal (tsc)
@@ -426,7 +428,8 @@ function writeAuditArtifacts(
   networkConfig: NetworkConfig,
   dockerCompose: DockerComposeConfig,
   squidConfig: string,
-  squidDnsServers?: string[]
+  squidDnsServers?: string[],
+  apiProxyUpstreams?: ApiProxyUpstream[],
 ): void {
   const auditDir = config.auditDir || path.join(config.workDir, 'audit');
   fs.mkdirSync(auditDir, { recursive: true, mode: 0o755 });
@@ -489,11 +492,12 @@ function writeAuditArtifacts(
     // log analysis classifies denied in-subnet IPs as AWF-internal rather
     // than external blocked domains.
     networkSubnet: networkConfig.subnet,
+    apiProxyUpstreams,
   });
   writeAuditArtifact(
     auditDir,
     'policy-manifest.json',
-    JSON.stringify(policyManifest, null, 2)
+    redactSensitiveValues(JSON.stringify(policyManifest, null, 2), sensitiveEndpointForms)
   );
 
   if (config.nvx) {
@@ -592,6 +596,7 @@ export async function writeConfigs(config: WrapperConfig): Promise<void> {
   const envFileValues = config.envFile ? readEnvFile(config.envFile) : {};
   const otlpEnv = resolveOtlpEndpointEnv(config.additionalEnv, envFileValues);
   const otlpEndpoints = extractOtlpEndpointsFromEnv(otlpEnv);
+  const apiProxyUpstreams = resolveApiProxyUpstreams(config);
   if (otlpEndpoints.length > 0) {
     logger.debug(`Auto-allowing OTLP collector endpoint(s): ${otlpEndpoints.map(({ hostname, port }) => `${hostname}:${port}`).join(', ')}`);
   }
@@ -630,6 +635,7 @@ export async function writeConfigs(config: WrapperConfig): Promise<void> {
     // (see patchComposeWithTopologyHosts in topology.ts).
     topologyPeers: resolveTopologyPeerHosts(config),
     otlpEndpoints,
+    apiProxyUpstreams,
   });
   const squidConfigPath = path.join(config.workDir, 'squid.conf');
   fs.writeFileSync(squidConfigPath, squidConfig, { mode: 0o644 });
@@ -649,7 +655,7 @@ export async function writeConfigs(config: WrapperConfig): Promise<void> {
   // These files contain no secrets (redacted compose, domain ACLs, policy rules)
   // and are made world-readable so the gh-aw post-run audit step (running as
   // non-root runner user) can stat/read them even if AWF cleanup is interrupted.
-  writeAuditArtifacts(config, networkConfig, dockerCompose, squidConfig, squidDnsServers);
+  writeAuditArtifacts(config, networkConfig, dockerCompose, squidConfig, squidDnsServers, apiProxyUpstreams);
 }
 
 /** @internal Exposed only for unit tests — not part of the public API. */

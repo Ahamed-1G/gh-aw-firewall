@@ -22,6 +22,7 @@ const {
   composeBodyTransforms,
   getTargetScheme,
   stripTargetScheme,
+  parseApiTargetAndBasePath,
 } = require('../proxy-utils');
 const { parseBodyAsObject } = require('../body-utils');
 const { createOidcAwareProviderAdapter } = require('../adapter-factory');
@@ -107,7 +108,8 @@ function createCopilotAdapter(env, deps = {}) {
       ? 'github_copilot_integration_id'
       : 'default';
   const rawTarget = deriveCopilotApiTarget(env);
-  const basePath = normalizeBasePath(env[COPILOT_ENV.API_BASE_PATH]);
+  const basePath = normalizeBasePath(env[COPILOT_ENV.API_BASE_PATH]
+    || parseApiTargetAndBasePath(env[COPILOT_ENV.PROVIDER_BASE_URL]).basePath);
 
   // OIDC auth strategy (Azure OpenAI via Entra, AWS Bedrock, GCP Vertex AI) for
   // BYOK targets pointed at by COPILOT_PROVIDER_BASE_URL. Mirrors the OpenAI
@@ -183,7 +185,7 @@ function createCopilotAdapter(env, deps = {}) {
    */
  function buildCopilotModelsRequest(extra = {}) {
    return {
-     url: `https://${rawTarget}/models`,
+     url: `${getTargetScheme(rawTarget)}://${stripTargetScheme(rawTarget)}/models`,
      opts: {
        method: 'GET',
        headers: withCopilotIntegration(

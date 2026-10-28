@@ -20,7 +20,10 @@ describe('websocket-tunnel', () => {
     expect(extractRequestModelFromUrl('/v1/chat/completions?foo=bar')).toBeNull();
   });
 
-  it('passes the caller to the tracker and strips its header from a successful tunnel', () => {
+  it.each([
+    ['api.openai.com', 'api.openai.com:80'],
+    ['host.docker.internal:11434', 'host.docker.internal:11434'],
+  ])('preserves %s and strips caller headers from a successful tunnel', (targetHost, authority) => {
     const connectReq = new EventEmitter();
     connectReq.end = jest.fn();
     const requestSpy = jest.spyOn(http, 'request').mockReturnValue(connectReq);
@@ -51,7 +54,7 @@ describe('websocket-tunnel', () => {
         req,
         socket,
         head: Buffer.alloc(0),
-        targetHost: 'api.openai.com',
+        targetHost,
         targetScheme: 'http',
         injectHeaders: {},
         provider: 'openai',
@@ -61,7 +64,7 @@ describe('websocket-tunnel', () => {
       });
       expect(requestSpy).toHaveBeenCalledWith(expect.objectContaining({
         method: 'CONNECT',
-        path: 'api.openai.com:80',
+        path: authority,
       }));
       expect(connectReq.end).toHaveBeenCalledTimes(1);
       connectReq.emit('connect', { statusCode: 200 }, tunnel);

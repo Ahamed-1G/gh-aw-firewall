@@ -103,10 +103,13 @@ describe('resolveOpenAiBaseUrlFromEnv', () => {
     );
   });
 
-  it('rejects non-default ports because the sidecar cannot route them', () => {
-    expect(() => resolveOpenAiBaseUrlFromEnv(VAR, { [VAR]: 'https://lb.internal:8443/v1' })).toThrow(
-      /non-default port/
-    );
+  it('preserves non-default HTTPS ports', () => {
+    expect(resolveOpenAiBaseUrlFromEnv(VAR, { [VAR]: 'https://lb.internal:8443/v1' })).toMatchObject({
+      url: 'https://lb.internal:8443/v1',
+      host: 'lb.internal',
+      hostPort: 'lb.internal:8443',
+      basePath: '/v1',
+    });
   });
 
   it('reads from process.env by default', () => {

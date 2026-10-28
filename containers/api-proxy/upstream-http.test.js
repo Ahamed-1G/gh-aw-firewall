@@ -44,6 +44,7 @@ describe('upstream-http', () => {
       cb({ statusCode: 200, headers: {} });
       return proxyReq;
     });
+
     const handleUpstreamResponse = jest.fn();
     const proxyAgent = { keepAlive: true };
 
@@ -70,6 +71,26 @@ describe('upstream-http', () => {
     expect(proxyReq.write).toHaveBeenCalledWith(Buffer.from('{"ok":true}'));
     expect(proxyReq.end).toHaveBeenCalled();
     expect(handleUpstreamResponse).toHaveBeenCalled();
+  });
+
+  test.each([
+    ['http', 'host.docker.internal:11434', 'host.docker.internal', 11434],
+    ['https', 'gateway.example:8443', 'gateway.example', 8443],
+    ['https', 'gateway.example', 'gateway.example', 443],
+    ['http', 'gateway.example', 'gateway.example', 80],
+    ['http', '[::1]:11434', '::1', 11434],
+  ])('dispatches %s://%s using separate hostname and port', (targetScheme, targetHost, hostname, port) => {
+    const request = jest.fn(() => ({ on: jest.fn(), write: jest.fn(), end: jest.fn() }));
+    const proxyAgent = {};
+    const send = createSendUpstreamRequest({
+      http: { request }, https: { request }, proxyAgent,
+      handleUpstreamResponse: jest.fn(), sleep: jest.fn(),
+      otel: {}, handleRequestError: jest.fn(), metrics: {},
+    });
+    send({}, createContext({ targetScheme, targetHost }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      hostname, port, path: '/v1/chat/completions', agent: proxyAgent,
+    }), expect.any(Function));
   });
 
   test('rejects exhausted invocation budgets before dispatching another upstream request', () => {

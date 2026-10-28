@@ -46,16 +46,32 @@ describe('normalizeApiTarget', () => {
     expect(normalizeApiTarget('api.https.example.com')).toBe('api.https.example.com');
   });
 
-  it('should discard port from URL', () => {
-    expect(normalizeApiTarget('https://my-gateway.example.com:8443')).toBe('my-gateway.example.com');
+  it('should preserve port from URL', () => {
+    expect(normalizeApiTarget('https://my-gateway.example.com:8443')).toBe('my-gateway.example.com:8443');
   });
 
   it('should discard query and fragment from URL', () => {
     expect(normalizeApiTarget('https://my-gateway.example.com/path?key=val#frag')).toBe('my-gateway.example.com');
   });
 
-  it('should discard port from an explicit http:// URL while preserving the scheme', () => {
-    expect(normalizeApiTarget('http://my-gateway.example.com:8080')).toBe('http://my-gateway.example.com');
+  it('should preserve port and scheme from an explicit http:// URL', () => {
+    expect(normalizeApiTarget('http://my-gateway.example.com:8080')).toBe('http://my-gateway.example.com:8080');
+  });
+
+  it.each(['ftp://host:11434', 'file:///tmp/provider', 'ws://host:8443'])('rejects unsupported scheme %s', value => {
+    expect(() => normalizeApiTarget(value)).toThrow(/Unsupported API target scheme/);
+    expect(() => parseApiTargetAndBasePath(value)).toThrow(/Unsupported API target scheme/);
+  });
+
+  it.each([
+    ['http://host.docker.internal:11434/v1', 'http://host.docker.internal:11434'],
+    ['https://gateway:8443/v1', 'gateway:8443'],
+    ['https://gateway:443/v1', 'gateway'],
+    ['http://gateway:80/v1', 'http://gateway'],
+    ['gateway:8443/v1', 'gateway:8443'],
+    ['http://[::1]:11434/v1', 'http://[::1]:11434'],
+  ])('preserves the authority and base path of %s', (value, target) => {
+    expect(parseApiTargetAndBasePath(value)).toEqual({ target, basePath: '/v1' });
   });
 });
 

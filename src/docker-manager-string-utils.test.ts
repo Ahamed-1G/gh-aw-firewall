@@ -103,8 +103,12 @@ describe('docker-manager string/network utilities', () => {
       expect(normalizeApiTargetScheme('api.openai.com')).toBe('api.openai.com');
     });
 
-    it('should discard the port from an explicit http:// URL while preserving the scheme', () => {
-      expect(normalizeApiTargetScheme('http://my-gateway.example.com:8080')).toBe('http://my-gateway.example.com');
+    it('should preserve the port and scheme from an explicit http:// URL', () => {
+      expect(normalizeApiTargetScheme('http://my-gateway.example.com:8080')).toBe('http://my-gateway.example.com:8080');
+    });
+
+    it.each(['ftp://host:11434', 'file:///tmp/provider', 'ws://host:8443'])('rejects %s', value => {
+      expect(() => normalizeApiTargetScheme(value)).toThrow(/Invalid API target/);
     });
 
     it('should normalize a URL with a path to just the hostname', () => {

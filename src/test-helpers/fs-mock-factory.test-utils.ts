@@ -17,6 +17,7 @@ export function fsMockFactory() {
 
 export function hostEnvMockFactory(overrides: Record<string, unknown> = {}) {
   return {
+    normalizeApiTargetScheme: jest.requireActual<typeof import('../host-env')>('../host-env').normalizeApiTargetScheme,
     getSafeHostUid: jest.fn().mockReturnValue('1000'),
     getSafeHostGid: jest.fn().mockReturnValue('1000'),
     getRealUserHome: mockGetRealUserHome,

@@ -8,6 +8,7 @@ import { buildNoProxyEnv } from './no-proxy-utils';
 import { resolveOpenAiBaseUrlFromEnv } from '../openai-base-url-env';
 import { normalizeClaudeHostedWebPolicy } from '../claude-hosted-web-policy';
 import { normalizeCodexHostedWebPolicy } from '../codex-hosted-web-policy';
+import { resolveCopilotApiRouting } from '../copilot-api-resolver';
 
 const DEFAULT_API_PROXY_SHUTDOWN_TIMEOUT_MS = 8000;
 export const API_PROXY_UPSTREAM_CA_CERT_CONTAINER_PATH = '/usr/local/share/ca-certificates/awf-upstream-ca.crt';
@@ -21,18 +22,26 @@ export const MODEL_ROUTING_NOT_STAGED_MESSAGE = 'Model routing was configured bu
 export function buildProviderTargetEnv(config: WrapperConfig): Record<string, string> {
   const openAiEndpointOverride = resolveOpenAiEndpointOverride(config);
   const secretOpenAiBaseUrl = resolveOpenAiBaseUrlFromEnv(config.openaiBaseUrlEnv);
-  const resolvedOpenAiTarget = secretOpenAiBaseUrl?.host ?? config.openaiApiTarget ?? openAiEndpointOverride;
+  const resolvedOpenAiTarget = secretOpenAiBaseUrl?.hostPort ?? config.openaiApiTarget ?? openAiEndpointOverride;
   const resolvedOpenAiBasePath = secretOpenAiBaseUrl
     ? (secretOpenAiBaseUrl.basePath || undefined)
     : config.openaiApiBasePath;
   const copilotProviderType = config.copilotProviderType || getConfigEnvValue(config, COPILOT_ENV.PROVIDER_TYPE);
   const copilotProviderBaseUrl = config.copilotProviderBaseUrl || getConfigEnvValue(config, COPILOT_ENV.PROVIDER_BASE_URL);
   const copilotProviderApiKey = config.copilotProviderApiKey;
+  const copilotRouting = resolveCopilotApiRouting(
+    { copilotApiTarget: config.copilotApiTarget },
+    {
+      COPILOT_API_TARGET: getConfigEnvValue(config, COPILOT_ENV.API_TARGET),
+      COPILOT_API_BASE_PATH: config.copilotApiBasePath || getConfigEnvValue(config, COPILOT_ENV.API_BASE_PATH),
+      COPILOT_PROVIDER_BASE_URL: copilotProviderBaseUrl,
+    },
+  );
 
   const env: Record<string, string> = {};
 
   const providers: Array<{ target?: string; basePath?: string; envTarget: string; envBasePath: string; stripTarget?: boolean }> = [
-    { target: config.copilotApiTarget, basePath: config.copilotApiBasePath, envTarget: COPILOT_ENV.API_TARGET, envBasePath: COPILOT_ENV.API_BASE_PATH, stripTarget: true },
+    { target: copilotRouting.copilotApiTarget, basePath: copilotRouting.copilotApiBasePath, envTarget: COPILOT_ENV.API_TARGET, envBasePath: COPILOT_ENV.API_BASE_PATH, stripTarget: true },
     { target: resolvedOpenAiTarget, basePath: resolvedOpenAiBasePath, envTarget: OPENAI_ENV.TARGET, envBasePath: OPENAI_ENV.BASE_PATH, stripTarget: true },
     { target: config.anthropicApiTarget, basePath: config.anthropicApiBasePath, envTarget: ANTHROPIC_ENV.TARGET, envBasePath: ANTHROPIC_ENV.BASE_PATH, stripTarget: true },
     { target: config.geminiApiTarget, basePath: config.geminiApiBasePath, envTarget: GEMINI_ENV.TARGET, envBasePath: GEMINI_ENV.BASE_PATH, stripTarget: true },
@@ -125,8 +134,8 @@ function buildProviderRoutingEnv(config: WrapperConfig): Record<string, string> 
     // Configurable API targets (for GHES/GHEC / custom endpoints).
     // An explicit https:// scheme (or no scheme) is stripped to a bare hostname,
     // matching prior behavior; an explicit http:// scheme is preserved so the
-    // sidecar dials the target in cleartext on port 80 instead of always
-    // assuming HTTPS on 443 (see gh-aw-firewall#7862). server.js's
+    // sidecar uses cleartext, preserving explicit ports for either scheme.
+    // See gh-aw-firewall#10764. server.js's
     // normalizeApiTarget() re-validates and normalizes this defensively
     // (gh-aw#25137), so any other scheme or malformed value is rejected there.
     ...buildProviderTargetEnv(config),

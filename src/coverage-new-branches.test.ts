@@ -14,7 +14,7 @@ describe('host-env: normalizeApiTargetScheme — error branch', () => {
   it('returns trimmed value unchanged when the URL constructor throws on the candidate', () => {
     // A bare string with spaces produces "https://not a valid url" which is invalid.
     const value = 'not a valid url with spaces';
-    expect(normalizeApiTargetScheme(value)).toBe(value.trim());
+    expect(() => normalizeApiTargetScheme(value)).toThrow(/Invalid API target/);
   });
 
   it('returns empty string for empty input', () => {

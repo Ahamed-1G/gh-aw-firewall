@@ -119,23 +119,14 @@ export function resolveOpenAiBaseUrlFromEnv(
 
   const scheme = 'https';
   const defaultPort = '443';
-  if (parsed.port && parsed.port !== defaultPort) {
-    // The api-proxy sidecar always connects to the target host on the scheme's
-    // default port, so a custom port would be silently dropped and misrouted.
-    throw new Error(
-      `Environment variable "${name}" specifies a non-default port, which the OpenAI API proxy ` +
-      'target does not support. Expose the endpoint on the default port for its scheme.'
-    );
-  }
-
   const basePath = normalizeBasePath(parsed.pathname);
 
   return {
     envVarName: name,
-    url: `${scheme}://${host}${basePath}`,
+    url: `${scheme}://${parsed.host}${basePath}`,
     scheme,
     host,
-    hostPort: `${host}:${defaultPort}`,
+    hostPort: `${host}:${parsed.port || defaultPort}`,
     basePath,
   };
 }

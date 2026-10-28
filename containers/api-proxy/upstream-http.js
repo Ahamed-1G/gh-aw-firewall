@@ -611,14 +611,13 @@ function createSendUpstreamRequest({
       }
     }
 
-    // Honor an explicit http:// target scheme (see proxy-utils.js normalizeApiTarget)
-    // by dialing the upstream in cleartext on port 80 instead of always assuming
-    // HTTPS on 443. Bare hostnames and explicit https:// targets both default to
-    // 'https', matching prior behavior.
+    // targetHost is an authority (including an optional port), not a DNS hostname.
     const isHttp = targetScheme === 'http';
+    const target = new URL(`${targetScheme}://${targetHost}`);
     const mod = isHttp ? http : https;
     const options = {
-      hostname: targetHost, port: isHttp ? 80 : 443, path: upstreamPath,
+      hostname: target.hostname.replace(/^\[|\]$/g, ''),
+      port: Number(target.port || (isHttp ? 80 : 443)), path: upstreamPath,
       method: req.method, headers: outboundHeaders,
       agent: proxyAgent,
       signal: cancellation.controller.signal,

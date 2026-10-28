@@ -3,8 +3,9 @@ import { generateDlpSquidConfig } from '../dlp';
 import { DEFAULT_DNS_SERVERS } from '../dns-resolver';
 import { generateSslBumpSection, generateTlsSniGuardSection } from './ssl-bump';
 import { validateAndSanitizeHostAccessPort, validateApiProxyPort } from './validation';
-import { formatDomainForSquid } from './domain-acl';
+import { assertSafeForSquidConfig, formatDomainForSquid } from './domain-acl';
 import { parseDomainList } from '../domain-matchers';
+import { isIP } from 'net';
 
 type DomainsByProto = ReturnType<typeof import('./domain-acl').parseDomainConfig>['domainsByProto'];
 type PatternsByProto = ReturnType<typeof import('./domain-acl').parseDomainConfig>['patternsByProto'];
@@ -118,7 +119,9 @@ function generatePortAclsAndRules(
   enableHostAccess?: boolean,
   allowHostPorts?: string,
   apiProxyPorts?: number[],
-  otlpEndpoints?: SquidConfig['otlpEndpoints']
+  otlpEndpoints?: SquidConfig['otlpEndpoints'],
+  apiProxyIp?: string,
+  apiProxyUpstreams?: SquidConfig['apiProxyUpstreams'],
 ): string {
   let portAclsSection = `# Port ACLs
 acl SSL_ports port 443
@@ -149,7 +152,35 @@ acl Safe_ports port 443         # HTTPS`;
     }
   }
 
+  const upstreamRules: string[] = [];
+  if (apiProxyIp && apiProxyUpstreams?.length) {
+    upstreamRules.push(
+      '# Exact configured upstream exceptions, restricted to the trusted API proxy.',
+      `acl api_upstream_source src ${apiProxyIp}/32`,
+    );
+    apiProxyUpstreams.forEach(({ hostname, port }, index) => {
+      validateApiProxyPort(port);
+      assertSafeForSquidConfig(hostname);
+      const parsed = new URL(`https://${hostname}`);
+      if (parsed.hostname !== hostname || parsed.host !== hostname || parsed.pathname !== '/'
+          || parsed.search || parsed.hash || parsed.username || parsed.password
+          || hostname.startsWith('.') || hostname.includes('*')) {
+        throw new Error('Invalid API proxy upstream hostname');
+      }
+      const ip = hostname.replace(/^\[|\]$/g, '');
+      const hostAcl = isIP(ip)
+        ? `dstdom_regex ^${isIP(ip) === 6 ? `\\[?${ip}\\]?` : ip.replace(/\./g, '\\.')}$`
+        : `dstdomain -n ${hostname}`;
+      upstreamRules.push(
+        `acl api_upstream_${index}_host ${hostAcl}`,
+        `acl api_upstream_${index}_port port ${port}`,
+        `http_access allow api_upstream_source api_upstream_${index}_host api_upstream_${index}_port`,
+      );
+    });
+  }
+
   return `${portAclsSection}
+${upstreamRules.join('\n')}
 
 # Access rules
 # Deny unsafe ports (only allow Safe_ports defined above)
@@ -273,6 +304,7 @@ function generateConfigSections(options: {
   dnsServers?: string[];
   topologyPeers?: string[];
   otlpEndpoints?: SquidConfig['otlpEndpoints'];
+  apiProxyUpstreams?: SquidConfig['apiProxyUpstreams'];
   cliProxyIp?: string;
 }): {
   dlpAclSection: string;
@@ -320,7 +352,9 @@ function generateConfigSections(options: {
     apiProxyIp,
     cliProxyIp,
   });
-  const portAclsAndRules = generatePortAclsAndRules(enableHostAccess, allowHostPorts, apiProxyPorts, otlpEndpoints);
+  const portAclsAndRules = generatePortAclsAndRules(
+    enableHostAccess, allowHostPorts, apiProxyPorts, otlpEndpoints, apiProxyIp, options.apiProxyUpstreams,
+  );
   const apiProxySection = generateApiProxySection(apiProxyIp);
   const allowedIpSection = generateAllowedIpSection(domains ?? []);
   const topologyPeersSection = generateTopologyPeersSection(topologyPeers);

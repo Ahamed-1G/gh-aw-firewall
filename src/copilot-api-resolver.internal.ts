@@ -1,6 +1,6 @@
 /**
  * Parse a provider base URL into a URL object, handling missing schemes.
- * Returns undefined if the input is empty or unparseable.
+ * Returns undefined if empty; rejects malformed or unsupported URLs.
  */
 function parseProviderBaseUrl(providerBaseUrl: string | undefined): URL | undefined {
   const trimmed = providerBaseUrl?.trim();
@@ -11,20 +11,25 @@ function parseProviderBaseUrl(providerBaseUrl: string | undefined): URL | undefi
     : `https://${trimmed}`;
 
   try {
-    return new URL(candidate);
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Unsupported Copilot provider URL scheme');
+    }
+    return parsed;
   } catch {
-    return undefined;
+    throw new Error('Invalid Copilot provider base URL; expected an HTTP(S) URL or hostname');
   }
 }
 
 /**
- * Derive a Copilot API target hostname from COPILOT_PROVIDER_BASE_URL.
- * Returns undefined when the value is empty or not a valid URL/host.
+ * Derive a Copilot API authority and explicit HTTP scheme from the base URL.
  */
 export function deriveCopilotApiTargetFromProviderBaseUrl(
   providerBaseUrl: string | undefined
 ): string | undefined {
-  return parseProviderBaseUrl(providerBaseUrl)?.hostname || undefined;
+  const parsed = parseProviderBaseUrl(providerBaseUrl);
+  if (!parsed) return undefined;
+  return parsed.protocol === 'http:' ? `http://${parsed.host}` : parsed.host;
 }
 
 /**

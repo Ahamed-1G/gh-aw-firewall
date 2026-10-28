@@ -97,6 +97,7 @@ export function generateSquidConfig(config: SquidConfig): string {
     dnsServers,
     topologyPeers,
     otlpEndpoints,
+    apiProxyUpstreams: config.apiProxyUpstreams,
     cliProxyIp,
   });
   const otlpAccessRules = (otlpEndpoints ?? []).map((endpoint, index) =>

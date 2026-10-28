@@ -10,6 +10,11 @@ export interface OtlpEndpoint {
   protocol: 'http' | 'https';
 }
 
+export interface ApiProxyUpstream {
+  hostname: string;
+  port: number;
+}
+
 /**
  * Configuration for the Squid proxy server
  * 
@@ -159,6 +164,9 @@ export interface SquidConfig {
    * do not block connections to the api-proxy before the allow rule fires.
    */
   apiProxyPorts?: number[];
+
+  /** Exact upstream host/port exceptions usable only by the trusted API proxy. */
+  apiProxyUpstreams?: ApiProxyUpstream[];
 
   /**
    * IP address of the credential-isolated CLI proxy sidecar.

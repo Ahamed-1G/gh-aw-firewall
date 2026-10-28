@@ -1,6 +1,6 @@
 'use strict';
 
-const { normalizeApiTarget } = require('../proxy-utils');
+const { normalizeApiTarget, parseApiTargetAndBasePath, getTargetHostname } = require('../proxy-utils');
 const { COPILOT_PLACEHOLDER_TOKEN } = require('./copilot-byok');
 const { URL } = require('url');
 
@@ -116,6 +116,10 @@ function deriveCopilotApiTarget(env = process.env) {
     // fall through to auto-derivation when the value is malformed.
     if (target) return target;
   }
+  if (env.COPILOT_PROVIDER_BASE_URL) {
+    const { target } = parseApiTargetAndBasePath(env.COPILOT_PROVIDER_BASE_URL);
+    if (target) return target;
+  }
   const serverHost = classifyGithubServerHost(env);
   if (serverHost.kind === 'ghec') return `copilot-api.${serverHost.subdomain}.ghe.com`;
   if (serverHost.kind === 'ghes') return 'api.enterprise.githubcopilot.com';
@@ -164,7 +168,7 @@ function deriveGitHubApiBasePath(env = process.env) {
 }
 
 function isGithubCopilotCatalogTarget(rawTarget) {
-  const target = normalizeApiTarget(rawTarget);
+  const target = getTargetHostname(normalizeApiTarget(rawTarget));
   if (!target) return true;
   return target === 'api.githubcopilot.com'
     || target === 'api.enterprise.githubcopilot.com'
@@ -230,7 +234,7 @@ function isGhesInstance(resolvedTarget, env = process.env) {
   // Explicit non-GHES platform types override heuristics
   if (env.AWF_PLATFORM_TYPE && env.AWF_PLATFORM_TYPE !== 'ghes') return false;
 
-  if (resolvedTarget === 'api.enterprise.githubcopilot.com') return true;
+  if (getTargetHostname(resolvedTarget) === 'api.enterprise.githubcopilot.com') return true;
   return classifyGithubServerHost(env).kind === 'ghes';
 }
 
@@ -288,7 +292,7 @@ function copilotTargetRequiresGitHubTokenPrefix(resolvedTarget, env = process.en
   // GitHub OAuth/PAT credentials, regardless of platform type. This check must
   // come before the AWF_PLATFORM_TYPE guard so that an explicit platform type
   // does not suppress the required 'token' prefix.
-  const target = normalizeApiTarget(resolvedTarget);
+  const target = getTargetHostname(normalizeApiTarget(resolvedTarget));
   if (target && (
     GITHUB_TOKEN_PREFIX_COPILOT_TARGETS.has(target)
   )) return true;

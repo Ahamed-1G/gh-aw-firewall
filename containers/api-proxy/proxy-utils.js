@@ -14,7 +14,7 @@ const { URL } = require('url');
  * Normalizes an API target value to a hostname, optionally prefixed with an
  * explicit `http://` scheme.
  * Accepts either a hostname or a full URL and extracts the hostname,
- * discarding any path, query, fragment, credentials, or port. Path
+ * preserving its port and discarding any path, query, fragment, or credentials. Path
  * configuration must be provided separately via the existing
  * *_API_BASE_PATH environment variables.
  *
@@ -22,7 +22,7 @@ const { URL } = require('url');
  * hostname (HTTPS is the implicit default, matching existing behavior).
  * An explicit `http://` URL preserves the `http://` prefix so that
  * downstream consumers (see getTargetScheme/stripTargetScheme) can dial the
- * target in cleartext on port 80 instead of always assuming HTTPS on 443 —
+ * target in cleartext, using the explicit port or the scheme default —
  * this mirrors the runner-side allowlist, which already treats `http://`
  * targets as a supported, explicitly opted-in configuration.
  *
@@ -34,13 +34,14 @@ function normalizeApiTarget(value) {
 
   const parsed = parseApiTargetUrl(value);
   if (parsed.kind === 'empty') return undefined;
+  if (parsed.kind === 'unsupported') throw new Error('Unsupported API target scheme; expected HTTP or HTTPS');
   if (parsed.kind === 'invalid') {
     console.warn(`Invalid API target ${parsed.safe}; expected a hostname (e.g. 'api.example.com') or URL`);
     return undefined;
   }
 
   if (parsed.kind === 'ok') {
-    if (parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password || parsed.port) {
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
       console.warn(
         `Ignoring unsupported API target URL components in ${parsed.safe}; ` +
         'configure path prefixes via the corresponding *_API_BASE_PATH environment variable.'
@@ -48,7 +49,7 @@ function normalizeApiTarget(value) {
     }
 
     if (!parsed.hostname) return undefined;
-    return parsed.protocol === 'http:' ? `http://${parsed.hostname}` : parsed.hostname;
+    return parsed.protocol === 'http:' ? `http://${parsed.host}` : parsed.host;
   }
 
   return undefined;
@@ -72,7 +73,7 @@ function getTargetScheme(rawTarget) {
  * signing, logging, and other places that must never see a scheme prefix.
  *
  * @param {string|undefined} rawTarget - Value returned by normalizeApiTarget (or a default hostname)
- * @returns {string|undefined} Bare hostname
+ * @returns {string|undefined} Hostname with optional port
  */
 function stripTargetScheme(rawTarget) {
   if (typeof rawTarget === 'string' && rawTarget.startsWith('http://')) {
@@ -81,8 +82,14 @@ function stripTargetScheme(rawTarget) {
   return rawTarget;
 }
 
+/** Recover a hostname for host classification, never a hostname:port authority. */
+function getTargetHostname(rawTarget) {
+  if (!rawTarget) return rawTarget;
+  return new URL(`${getTargetScheme(rawTarget)}://${stripTargetScheme(rawTarget)}`).hostname;
+}
+
 /**
- * Parse a target URL/hostname into hostname + normalized pathname.
+ * Parse a target URL/hostname into authority (and HTTP scheme) + normalized pathname.
  * Intended for BYOK-style base URLs where path components are expected and valid.
  *
  * @param {string|undefined} value - Raw env var value
@@ -92,10 +99,11 @@ function parseApiTargetAndBasePath(value) {
   if (!value) return { target: undefined, basePath: '' };
 
   const parsed = parseApiTargetUrl(value);
+  if (parsed.kind === 'unsupported') throw new Error('Unsupported API target scheme; expected HTTP or HTTPS');
   if (parsed.kind !== 'ok') return { target: undefined, basePath: '' };
 
   return {
-    target: parsed.hostname || undefined,
+    target: parsed.protocol === 'http:' ? `http://${parsed.host}` : parsed.host,
     basePath: normalizeBasePath(parsed.pathname),
   };
 }
@@ -111,10 +119,14 @@ function parseApiTargetUrl(value) {
 
   try {
     const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { kind: 'unsupported', safe };
+    }
     return {
       kind: 'ok',
       safe,
       hostname: parsed.hostname,
+      host: parsed.host,
       protocol: parsed.protocol,
       pathname: parsed.pathname,
       search: parsed.search,
@@ -348,6 +360,7 @@ function sanitizeAcceptEncoding(value) {
 }
 
 module.exports = {
+  getTargetHostname,
   normalizeApiTarget,
   getTargetScheme,
   stripTargetScheme,

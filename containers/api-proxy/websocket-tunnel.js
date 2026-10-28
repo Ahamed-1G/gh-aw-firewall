@@ -111,14 +111,16 @@ function createWebSocketTunnel({
     const proxyHost = proxyUrl.hostname;
     const proxyPort = parseInt(proxyUrl.port, 10) || 3128;
     const isHttps = targetScheme !== 'http';
-    const targetPort = isHttps ? 443 : 80;
+    const target = new URL(`${targetScheme}://${targetHost}`);
+    const targetPort = target.port || (isHttps ? 443 : 80);
+    const targetAuthority = `${target.hostname}:${targetPort}`;
 
     const connectReq = http.request({
       host: proxyHost,
       port: proxyPort,
       method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: { 'Host': `${targetHost}:${targetPort}` },
+      path: targetAuthority,
+      headers: { 'Host': targetAuthority },
     });
 
     connectReq.once('error', (err) => abort(`CONNECT error: ${err.message}`));
@@ -189,7 +191,11 @@ function createWebSocketTunnel({
         return;
       }
 
-      const tlsSocket = tls.connect({ socket: tunnel, servername: targetHost, rejectUnauthorized: true });
+      const tlsSocket = tls.connect({
+        socket: tunnel,
+        servername: target.hostname.replace(/^\[|\]$/g, ''),
+        rejectUnauthorized: true,
+      });
       const onTlsError = (err) => abort(`TLS handshake error: ${err.message}`, tunnel);
       tlsSocket.once('error', onTlsError);
 

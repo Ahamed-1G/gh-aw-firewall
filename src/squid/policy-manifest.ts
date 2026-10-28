@@ -68,6 +68,20 @@ export function generatePolicyManifest(config: SquidConfig): PolicyManifest {
   // even though port 8080 is not in Safe_ports. This mirrors the rule ordering
   // in generateSquidConfig / generateTopologyPeersSection.
   addTopologyPeerAllowRules(state, topologyPeers);
+  if (apiProxyIp) {
+    for (const [index, endpoint] of (config.apiProxyUpstreams ?? []).entries()) {
+      state.rules.push({
+        id: `allow-api-upstream-${index}`,
+        order: ++state.order,
+        action: 'allow',
+        aclName: `api_upstream_source api_upstream_${index}_host api_upstream_${index}_port`,
+        protocol: 'both',
+        // A domain-only replay cannot evaluate source and destination-port constraints.
+        domains: [],
+        description: `Allow API proxy ${apiProxyIp} to configured upstream ${endpoint.hostname}:${endpoint.port}`,
+      });
+    }
+  }
   addPortSafetyRules(state);
   addApiProxyAllowRules(state, apiProxyIp);
   addAllowedIpRules(state, domains);
