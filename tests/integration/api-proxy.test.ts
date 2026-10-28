@@ -65,8 +65,8 @@ describe('API Proxy Sidecar', () => {
         `set -eu; curl -fsS http://${API_PROXY_IP}:10002/v1/models; ` +
         `curl -fsS http://${API_PROXY_IP}:10002/chat/completions -H 'Content-Type: application/json' ` +
         `-d '{"model":"awf-port-test","messages":[{"role":"user","content":"hi"}]}'; ` +
-        `test "$(curl -s -o /dev/null -w '%{http_connect}' --max-time 10 --proxy http://172.30.0.10:3128 ` +
-        `--proxytunnel http://host.docker.internal:11434/v1/models || true)" = 403`,
+        `test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '' --proxy http://172.30.0.10:3128 ` +
+        `http://host.docker.internal:11434/v1/models || true)" = 403`,
         {
           configFile,
           buildLocal: true,
@@ -92,10 +92,9 @@ describe('API Proxy Sidecar', () => {
         const probe = await execa('docker', [
           'exec', 'awf-api-proxy', 'node', '-e',
           `const req = require('http').request({
-            hostname: '172.30.0.10', port: 3128, method: 'CONNECT',
-            path: ${JSON.stringify(authority)}
-          });
-          req.on('connect', (res, socket) => { console.log(res.statusCode); socket.destroy(); });
+            hostname: '172.30.0.10', port: 3128, method: 'GET',
+            path: ${JSON.stringify(`http://${authority}/v1/models`)}
+          }, res => { console.log(res.statusCode); res.resume(); });
           req.on('error', () => process.exit(1));
           req.setTimeout(10000, () => { req.destroy(); process.exit(1); });
           req.end();`,
