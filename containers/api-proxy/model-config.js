@@ -20,6 +20,7 @@ const {
 const { parseScopedAutoRequest, rewriteScopedAutoRequest, pickerError } = require('./scoped-auto-model');
 const { parseBodyAsObject } = require('./body-utils');
 const { resolveModelSelector } = require('./model-selector');
+const { captureRuntimePricing } = require('./runtime-model-catalog');
 
 const MODEL_ALIASES_RAW = (process.env.AWF_MODEL_ALIASES || '').trim() || undefined;
 const MODEL_ALIASES = parseModelAliases(MODEL_ALIASES_RAW);
@@ -213,6 +214,22 @@ function makeModelBodyTransform(
       if (!result || (result.fallback && result.fallback.activated)) {
         await refreshProviderModelsForResolution(provider);
         result = rewriteModelInBody(body, provider, MODEL_ALIASES.models, resolvableModels(), providerModelFallback, MODEL_POLICY_CONFIG);
+      }
+    }
+    if (req && result?.aliasKeys?.some(aliasKey => {
+      const key = Object.keys(MODEL_ALIASES?.models || {})
+        .find(name => name.toLowerCase() === aliasKey.toLowerCase());
+      return key !== undefined && MODEL_ALIASES.models[key]?.fallback === false;
+    })) {
+      req.awfModelRecoveryDisabled = true;
+    }
+    if (req) {
+      const currentRuntimePricing = captureRuntimePricing();
+      if (Object.hasOwn(currentRuntimePricing, provider)) {
+        req.awfRuntimePricing = {
+          ...(req.awfRuntimePricing || {}),
+          [provider]: currentRuntimePricing[provider],
+        };
       }
     }
     if (!result) return null;
