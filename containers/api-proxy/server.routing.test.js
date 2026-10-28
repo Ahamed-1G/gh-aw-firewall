@@ -46,16 +46,26 @@ describe('normalizeApiTarget', () => {
     expect(normalizeApiTarget('api.https.example.com')).toBe('api.https.example.com');
   });
 
-  it('should discard port from URL', () => {
-    expect(normalizeApiTarget('https://my-gateway.example.com:8443')).toBe('my-gateway.example.com');
+  it('should preserve port from URL', () => {
+    expect(normalizeApiTarget('https://my-gateway.example.com:8443')).toBe('my-gateway.example.com:8443');
   });
 
   it('should discard query and fragment from URL', () => {
     expect(normalizeApiTarget('https://my-gateway.example.com/path?key=val#frag')).toBe('my-gateway.example.com');
   });
 
-  it('should discard port from an explicit http:// URL while preserving the scheme', () => {
-    expect(normalizeApiTarget('http://my-gateway.example.com:8080')).toBe('http://my-gateway.example.com');
+  it('should preserve port from an explicit http:// URL and preserve the scheme', () => {
+    expect(normalizeApiTarget('http://my-gateway.example.com:11434')).toBe('http://my-gateway.example.com:11434');
+  });
+
+  it.each([
+    ['gateway.example.com:8443', 'gateway.example.com:8443'],
+    ['https://gateway.example.com:443', 'gateway.example.com'],
+    ['http://gateway.example.com:80', 'http://gateway.example.com'],
+    ['http://[::1]:11434', 'http://[::1]:11434'],
+    ['https://' + 'user:pass@gateway.example.com:8443/v1?key=secret#frag', 'gateway.example.com:8443'],
+  ])('normalizes %s without propagating credentials or query', (value, expected) => {
+    expect(normalizeApiTarget(value)).toBe(expected);
   });
 });
 
@@ -90,9 +100,29 @@ describe('parseApiTargetAndBasePath', () => {
   it('returns empty values for invalid input', () => {
     expect(parseApiTargetAndBasePath('://invalid')).toEqual({ target: undefined, basePath: '' });
   });
+
+  it.each([
+    ['http://' + 'user:pass@localhost:11434/v1/?key=secret#fragment', 'http://localhost:11434'],
+    ['https://gateway.example.com:8443/v1/', 'gateway.example.com:8443'],
+    ['gateway.example.com:8443/v1/', 'gateway.example.com:8443'],
+  ])('preserves scheme, port and base path for %s', (value, target) => {
+    expect(parseApiTargetAndBasePath(value)).toEqual({ target, basePath: '/v1' });
+  });
 });
 
 describe('createAdapterMethods', () => {
+  it.each([
+    ['http://localhost:11434', 'http://localhost:11434/v1/models'],
+    ['gateway.example.com:8443', 'https://gateway.example.com:8443/v1/models'],
+  ])('preserves target %s in discovery and validation', (rawTarget, url) => {
+    const adapter = createAdapterMethods({
+      apiKey: 'test-key', rawTarget, basePath: '/v1',
+      provider: 'test', port: 12345, modelsPath: '/v1/models',
+    });
+    expect(adapter.getModelsFetchConfig().url).toBe(url);
+    expect(adapter.getValidationProbe().url).toBe(url);
+  });
+
   it('builds default validation, model-fetch, and reflection methods', () => {
     const methods = createAdapterMethods({
       apiKey: 'sk-test',
