@@ -35,14 +35,17 @@ function normalizeApiTarget(value) {
   const parsed = parseApiTargetUrl(value);
   if (parsed.kind === 'empty') return undefined;
   if (parsed.kind === 'invalid') {
-    console.warn(`Invalid API target ${parsed.safe}; expected a hostname (e.g. 'api.example.com') or URL`);
+    console.warn('Invalid API target; expected a hostname (e.g. \'api.example.com\') or URL');
     return undefined;
   }
 
   if (parsed.kind === 'ok') {
     if (parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+      const displayTarget = parsed.hostname
+        ? `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`
+        : '<unknown target>';
       console.warn(
-        `Ignoring unsupported API target URL components in ${parsed.safe}; ` +
+        `Ignoring unsupported API target URL components in ${displayTarget}; ` +
         'configure path prefixes via the corresponding *_API_BASE_PATH environment variable.'
       );
     }
@@ -119,13 +122,11 @@ function parseApiTargetUrl(value) {
   const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
     ? trimmed
     : `https://${trimmed}`;
-  const safe = trimmed.replace(/[\x00-\x1f\x7f]/g, '?');
 
   try {
     const parsed = new URL(candidate);
     return {
       kind: 'ok',
-      safe,
       hostname: parsed.hostname,
       protocol: parsed.protocol,
       pathname: parsed.pathname,
@@ -136,7 +137,7 @@ function parseApiTargetUrl(value) {
       port: parsed.port,
     };
   } catch {
-    return { kind: 'invalid', safe };
+    return { kind: 'invalid' };
   }
 }
 

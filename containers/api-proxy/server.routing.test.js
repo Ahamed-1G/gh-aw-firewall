@@ -54,6 +54,26 @@ describe('normalizeApiTarget', () => {
     expect(normalizeApiTarget('https://my-gateway.example.com/path?key=val#frag')).toBe('my-gateway.example.com');
   });
 
+  it('does not log credentials, paths, queries, or fragments from API targets', () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      normalizeApiTarget('https://' + 'user:pass@my-gateway.example.com:8443/private/path?key=secret#fragment');
+      const message = warning.mock.calls[0][0];
+      expect(message).toContain('https://my-gateway.example.com:8443');
+      for (const secret of ['user', 'password', '/private/path', 'key=secret', 'fragment']) {
+        expect(message).not.toContain(secret);
+      }
+
+      warning.mockClear();
+      normalizeApiTarget('https://' + 'user:pass@bad host.example/path?key=secret');
+      for (const secret of ['user', 'pass', 'bad host', 'key=secret']) {
+        expect(warning.mock.calls[0][0]).not.toContain(secret);
+      }
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('should preserve port from an explicit http:// URL and preserve the scheme', () => {
     expect(normalizeApiTarget('http://my-gateway.example.com:11434')).toBe('http://my-gateway.example.com:11434');
   });

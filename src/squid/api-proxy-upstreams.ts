@@ -27,6 +27,15 @@ export function generateApiProxyUpstreamSection(
     // -n prevents reverse DNS from turning raw-IP requests into hostname matches.
     lines.push(`acl ${acl}_host dstdomain -n ${hostname}`);
     lines.push(`acl ${acl}_port port ${endpoint.port}`);
+    for (const rule of blockedAccessRules) {
+      const blockedAcl = rule.split(' ').pop();
+      if (blockedAcl) {
+        lines.push(`http_access deny api_upstream_source ${acl}_host ${acl}_port ${blockedAcl}`);
+      }
+    }
+    if (config.enableDlp) {
+      lines.push(`http_access deny api_upstream_source ${acl}_host ${acl}_port dlp_blocked`);
+    }
     lines.push(
       `http_access allow api_upstream_source ${acl}_host ${acl}_port${guards ? ` ${guards}` : ''}${config.enableDlp ? ' !dlp_blocked' : ''}`
     );

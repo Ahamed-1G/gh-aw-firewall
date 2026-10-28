@@ -33,9 +33,35 @@ describe('trusted API proxy custom upstream ports', () => {
       blockedDomains: ['host.docker.internal', '*.example.com'],
       enableDlp: true,
     });
+    const blockedDeny = 'http_access deny api_upstream_source api_upstream_0_host api_upstream_0_port blocked_domains';
+    const dlpDeny = 'http_access deny api_upstream_source api_upstream_0_host api_upstream_0_port dlp_blocked';
+    const allow = 'http_access allow api_upstream_source api_upstream_0_host api_upstream_0_port !blocked_domains !blocked_domains_regex !dlp_blocked';
+    expect(result).toContain(blockedDeny);
+    expect(result).toContain(dlpDeny);
+    expect(result.indexOf(blockedDeny)).toBeLessThan(result.indexOf(allow));
+    expect(result.indexOf(dlpDeny)).toBeLessThan(result.indexOf(allow));
     expect(result).toContain(
-      'http_access allow api_upstream_source api_upstream_0_host api_upstream_0_port !blocked_domains !blocked_domains_regex !dlp_blocked'
+      allow
     );
+  });
+
+  it('denies blocked and DLP matches before a custom port already in Safe_ports', () => {
+    const result = generateSquidConfig({
+      ...config,
+      enableHostAccess: true,
+      allowHostPorts: '11434',
+      blockedDomains: ['host.docker.internal'],
+      enableDlp: true,
+    });
+    const blockedDeny = 'http_access deny api_upstream_source api_upstream_0_host api_upstream_0_port blocked_domains';
+    const dlpDeny = 'http_access deny api_upstream_source api_upstream_0_host api_upstream_0_port dlp_blocked';
+    const allow = 'http_access allow api_upstream_source api_upstream_0_host api_upstream_0_port';
+    const broadAllow = 'http_access allow from_api_proxy';
+    expect(result).toContain('acl Safe_ports port 11434');
+    for (const deny of [blockedDeny, dlpDeny]) {
+      expect(result.indexOf(deny)).toBeLessThan(result.indexOf(allow));
+      expect(result.indexOf(deny)).toBeLessThan(result.indexOf(broadAllow));
+    }
   });
 
   it('does not open custom ports without an API proxy source', () => {
