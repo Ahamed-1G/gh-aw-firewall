@@ -59,10 +59,7 @@ describe('API Proxy Sidecar', () => {
       fs.writeFileSync(configFile, JSON.stringify({
         network: { allowDomains: ['host.docker.internal'], isolation: true },
         security: { enableHostAccess: true },
-        apiProxy: {
-          enabled: true,
-          targets: { copilot: { host: 'http://host.docker.internal:11434', basePath: '/v1' } },
-        },
+        apiProxy: { enabled: true },
       }));
       const result = await runner.run(
         `set -eu; curl -fsS http://${API_PROXY_IP}:10002/v1/models; ` +
@@ -76,7 +73,10 @@ describe('API Proxy Sidecar', () => {
           keepContainers: true,
           logLevel: 'debug',
           timeout: 300000,
-          env: { COPILOT_PROVIDER_API_KEY: 'awf-test-placeholder' },
+          env: {
+            COPILOT_PROVIDER_API_KEY: 'awf-test-placeholder',
+            COPILOT_PROVIDER_BASE_URL: 'http://host.docker.internal:11434/v1',
+          },
         }
       );
       expect(result).toSucceed();
