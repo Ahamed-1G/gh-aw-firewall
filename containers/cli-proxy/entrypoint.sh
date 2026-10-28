@@ -105,7 +105,7 @@ fi
 # Echoes the diagnosis string. Kept as a pure function so it can be unit-tested
 # in isolation — see tests/cli-proxy-probe-classify.test.sh (#5615).
 #   ECONNREFUSED ("connection refused" in gh output)  → not yet ready
-#   Timeout (exit 124, or "deadline"/"timed out")      → unreachable / slow
+#   Timeout (exit 124/143, or "deadline"/"timed out")  → unreachable / slow
 #   EAI_AGAIN / ENOTFOUND / getaddrinfo                → DNS not yet resolved
 #     (peer may not yet be joined to awf-net; keep retrying, do not fail fast)
 #   HTTP NNN in gh output                              → proxy reachable, but the
@@ -117,7 +117,8 @@ classify_probe_failure() {
   http_status="$(printf '%s\n%s\n' "${probe_err}" "${probe_out}" | grep -oiE "HTTP[/ ][0-9.]* ?[0-9]{3}|HTTP [0-9]{3}" | grep -oE "[0-9]{3}" | head -1 || true)"
   if echo "${probe_err}" | grep -qiE "connection refused|ECONNREFUSED"; then
     echo "not-yet-ready (ECONNREFUSED)"
-  elif [ "${probe_exit}" -eq 124 ] || echo "${probe_err}" | grep -qiE "timeout|deadline|timed out"; then
+  elif [ "${probe_exit}" -eq 124 ] || [ "${probe_exit}" -eq 143 ] ||
+       echo "${probe_err}" | grep -qiE "timeout|deadline|timed out"; then
     echo "unreachable (timeout)"
   elif echo "${probe_err}" | grep -qiE "EAI_AGAIN|ENOTFOUND|getaddrinfo|no such host|name or service not known"; then
     echo "dns-not-yet-ready"
@@ -147,11 +148,19 @@ while [ "$ATTEMPT" -le "$MAX_LIVENESS_ATTEMPTS" ]; do
        >"${PROBE_OUT_FILE}" 2>"${PROBE_ERR_FILE}"; then
     echo "[cli-proxy] DIFC proxy liveness probe succeeded on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}"
     break
+  else
+    PROBE_EXIT=$?
   fi
-  PROBE_EXIT=$?
   PROBE_ERR="$(cat "${PROBE_ERR_FILE}")"
   PROBE_OUT="$(cat "${PROBE_OUT_FILE}")"
   DIAG_TYPE="$(classify_probe_failure "${PROBE_ERR}" "${PROBE_OUT}" "${PROBE_EXIT}")"
+  # GHES intentionally returns 404 for rate_limit when rate limiting is disabled.
+  # This response confirms connectivity without accepting other API errors.
+  if [ "${DIAG_TYPE}" = "reachable-but-api-error (HTTP 404)" ] &&
+     printf '%s\n%s\n' "${PROBE_ERR}" "${PROBE_OUT}" | grep -qiF "Rate limiting is not enabled"; then
+    echo "[cli-proxy] WARNING: GHES rate limiting is disabled; DIFC proxy liveness probe succeeded on attempt ${ATTEMPT}/${MAX_LIVENESS_ATTEMPTS}"
+    break
+  fi
   if [ "$ATTEMPT" -ge "$MAX_LIVENESS_ATTEMPTS" ]; then
     echo "[cli-proxy] ERROR: DIFC proxy liveness probe failed for ${GH_HOST} (gh api exit=${PROBE_EXIT}, diagnosis=${DIAG_TYPE})"
     if [ -n "${PROBE_ERR}" ]; then
