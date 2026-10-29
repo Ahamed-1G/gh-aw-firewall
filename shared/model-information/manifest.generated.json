@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "compilerVersion": 4,
   "schemaHash": "df9780a1fd9a1418ec8d99cb4aaf27d49bda9c8a08d157036c6893798c64f479",
-  "catalogRevision": "ec22a0f553877b8e73f2f27c733df6683c1e50d859c8c0154015af64409ae31d",
-  "generatedAt": "2026-10-28T12:53:16.953Z",
+  "catalogRevision": "14ae7b3d050336a436d68130f532870705dbd11e2f7a0cadff9bf85c6d28c013",
+  "generatedAt": "2026-10-29T12:53:38.465Z",
   "sourceFiles": [
     "shared/model-information/sources/copilot-claude.json",
     "shared/model-information/sources/copilot-gemini.json",
@@ -18,8 +18,8 @@
   ],
   "import": {
     "importerVersion": "2",
-    "sha256": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
-    "accepted": 438,
+    "sha256": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e",
+    "accepted": 431,
     "rejected": 26,
     "collisions": []
   }

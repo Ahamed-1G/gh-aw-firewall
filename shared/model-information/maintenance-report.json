@@ -1,647 +1,18 @@
 {
   "schemaVersion": 1,
   "status": "proposed-awaiting-human-review",
-  "baseRevision": "492391885dc25aeae354afeb4d19b0659c3fbabf",
+  "baseRevision": "646d5508b3d15ef04e58ab0dffbf0964e674b312",
   "reviewBaseRevision": "492391885dc25aeae354afeb4d19b0659c3fbabf",
-  "runtimeConsumerEffects": [
+  "pendingSourceChangesBaseRevision": "492391885dc25aeae354afeb4d19b0659c3fbabf",
+  "pendingSourceChanges": [
     {
       "file": "containers/api-proxy/models.dev.catalog.json",
       "changes": [
         {
-          "pointer": "/runtimeResolution/@lookup=codestral-2508:batch",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "mistralai/codestral-2508:batch",
-              "alias": "mistralai/codestral-2508:batch",
-              "input": 0.15,
-              "cachedInput": 0.015,
-              "cacheWrite": null,
-              "output": 0.44999999999999996
-            }
-          },
-          "after": null
+          "pointer": "/data/@id=deepseek~1deepseek-chat-v3.1/maxCompletion",
+          "before": 32768,
+          "after": 147456
         },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/cachedInput",
-          "before": 0.015,
-          "after": 0.011399999999999999
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/input",
-          "before": 0.02,
-          "after": 0.0115
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/output",
-          "before": 1,
-          "after": 1.7999999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/cachedInput",
-          "before": 0.13,
-          "after": 0.25
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/input",
-          "before": 0.133,
-          "after": 0.2542
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/cachedInput",
-          "before": 0.015,
-          "after": 0.004200000000000001
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/input",
-          "before": 0.02,
-          "after": 0.14
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/output",
-          "before": 1,
-          "after": 0.42
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-0731/pricing/cachedInput",
-          "before": 0.0014140000000000001,
-          "after": 0.0238
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-0731/pricing/input",
-          "before": 0.04444,
-          "after": 0.119
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-0731/pricing/output",
-          "before": 0.13332,
-          "after": 0.238
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/input",
-          "before": 0.0422,
-          "after": 0.0475
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/output",
-          "before": 0.16369999999999998,
-          "after": 0.1568
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-pro/pricing/cachedInput",
-          "before": 0.06562699999999999,
-          "after": 0.074501
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-pro/pricing/input",
-          "before": 0.787524,
-          "after": 0.894012
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=deepseek-v4-pro/pricing/output",
-          "before": 1.575048,
-          "after": 1.788024
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gemma-3-4b-it/pricing/cachedInput",
-          "before": 0.02,
-          "after": 0.005
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gemma-3-4b-it/pricing/input",
-          "before": 0.04,
-          "after": 0.049999999999999996
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gemma-3-4b-it/pricing/output",
-          "before": 0.049999999999999996,
-          "after": 0.09999999999999999
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/cachedInput",
-          "before": 0.032999999999999995,
-          "after": 0.013000000000000001
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/input",
-          "before": 0.0341,
-          "after": 0.014
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/cachedInput",
-          "before": 0.03,
-          "after": 0.0237
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/input",
-          "before": 0.041299999999999996,
-          "after": 0.0237
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/output",
-          "before": 0.0758,
-          "after": 0.1324
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-6-1-terra",
-          "before": null,
-          "after": {
-            "exists": true,
-            "pricing": {
-              "modelId": "openai/gpt-6.1-terra",
-              "alias": "openai/gpt-6.1-terra",
-              "input": 1,
-              "cachedInput": 0.049999999999999996,
-              "cacheWrite": 1.25,
-              "output": 5
-            }
-          }
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-6-1-terra-pro",
-          "before": null,
-          "after": {
-            "exists": true,
-            "pricing": {
-              "modelId": "openai/gpt-6.1-terra-pro",
-              "alias": "openai/gpt-6.1-terra-pro",
-              "input": 1,
-              "cachedInput": 0.049999999999999996,
-              "cacheWrite": 1.25,
-              "output": 5
-            }
-          }
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-6-1-terra-pro:batch",
-          "before": null,
-          "after": {
-            "exists": true,
-            "pricing": {
-              "modelId": "openai/gpt-6.1-terra-pro:batch",
-              "alias": "openai/gpt-6.1-terra-pro:batch",
-              "input": 0.5,
-              "cachedInput": 0.024999999999999998,
-              "cacheWrite": 0.625,
-              "output": 2.5
-            }
-          }
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-6-1-terra:batch",
-          "before": null,
-          "after": {
-            "exists": true,
-            "pricing": {
-              "modelId": "openai/gpt-6.1-terra:batch",
-              "alias": "openai/gpt-6.1-terra:batch",
-              "input": 0.5,
-              "cachedInput": 0.024999999999999998,
-              "cacheWrite": 0.625,
-              "output": 2.5
-            }
-          }
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-terra-latest/pricing/cacheWrite",
-          "before": 2.5,
-          "after": 1.25
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-terra-latest/pricing/cachedInput",
-          "before": 0.19999999999999998,
-          "after": 0.049999999999999996
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-terra-latest/pricing/input",
-          "before": 2,
-          "after": 1
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=gpt-terra-latest/pricing/output",
-          "before": 12,
-          "after": 5
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=granite-4-0-h-micro",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "ibm-granite/granite-4.0-h-micro",
-              "alias": "ibm-granite/granite-4.0-h-micro",
-              "input": 0.017,
-              "cachedInput": 0.0017000000000000001,
-              "cacheWrite": null,
-              "output": 0.112
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=hermes-4-405b/pricing/cachedInput",
-          "before": 0.1,
-          "after": 0.19999999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-k2-7-code/pricing/input",
-          "before": 0.6712,
-          "after": 0.56
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-k2-7-code/pricing/output",
-          "before": 3.35,
-          "after": 3.1
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/cachedInput",
-          "before": 0.16999999999999998,
-          "after": 0.19
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/input",
-          "before": 0.18,
-          "after": 0.19999999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/cachedInput",
-          "before": 0.16999999999999998,
-          "after": 0.16
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/input",
-          "before": 0.18,
-          "after": 0.16049999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/output",
-          "before": 20,
-          "after": 8.940000000000001
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/cachedInput",
-          "before": 0.024999999999999998,
-          "after": 0.002
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/input",
-          "before": 0.049999999999999996,
-          "after": 0.02
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/output",
-          "before": 0.08,
-          "after": 0.04
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5/pricing/cachedInput",
-          "before": 0.00255,
-          "after": 0.08
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5/pricing/input",
-          "before": 0.119,
-          "after": 0.39999999999999997
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5/pricing/output",
-          "before": 0.238,
-          "after": 2
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5-pro/pricing/cachedInput",
-          "before": 0.0028,
-          "after": 0.096
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5-pro/pricing/input",
-          "before": 0.3045,
-          "after": 0.48
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mimo-v2-5-pro/pricing/output",
-          "before": 0.609,
-          "after": 1.7999999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=ministral-8b-2512:batch",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "mistralai/ministral-8b-2512:batch",
-              "alias": "mistralai/ministral-8b-2512:batch",
-              "input": 0.075,
-              "cachedInput": 0.0075,
-              "cacheWrite": null,
-              "output": 0.075
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mistral-large-2512:batch",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "mistralai/mistral-large-2512:batch",
-              "alias": "mistralai/mistral-large-2512:batch",
-              "input": 0.25,
-              "cachedInput": 0.024999999999999998,
-              "cacheWrite": null,
-              "output": 0.75
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mistral-medium-3-1:batch",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "mistralai/mistral-medium-3.1:batch",
-              "alias": "mistralai/mistral-medium-3.1:batch",
-              "input": 0.19999999999999998,
-              "cachedInput": 0.02,
-              "cacheWrite": null,
-              "output": 1
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=mistral-small-2603:batch",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "mistralai/mistral-small-2603:batch",
-              "alias": "mistralai/mistral-small-2603:batch",
-              "input": 0.075,
-              "cachedInput": 0.0075,
-              "cacheWrite": null,
-              "output": 0.3
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=nemotron-3-nano-30b-a3b/pricing/cachedInput",
-          "before": 0.006,
-          "after": 0.012
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=nemotron-3-super-120b-a12b:free",
-          "before": {
-            "exists": true,
-            "pricing": {
-              "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
-              "alias": "nvidia/nemotron-3-super-120b-a12b:free",
-              "input": 0,
-              "cachedInput": 0,
-              "cacheWrite": null,
-              "output": 0
-            }
-          },
-          "after": null
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-30b-a3b-instruct-2507/pricing/cachedInput",
-          "before": 0.01,
-          "after": 0.09999999999999999
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-5-27b/pricing/cachedInput",
-          "before": 0.27,
-          "after": 0.026000000000000002
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-5-27b/pricing/input",
-          "before": 0.27,
-          "after": 0.26
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-5-27b/pricing/output",
-          "before": 2.16,
-          "after": 2.6
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-6-27b/pricing/cachedInput",
-          "before": 0.032,
-          "after": 0.045
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-6-27b/pricing/input",
-          "before": 0.32,
-          "after": 0.44999999999999996
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-6-27b/pricing/output",
-          "before": 3.1999999999999997,
-          "after": 2.7
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-6-35b-a3b/pricing/cachedInput",
-          "before": 0.049999999999999996,
-          "after": 0.024999999999999998
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-6-35b-a3b/pricing/output",
-          "before": 0.95,
-          "after": 0.8999999999999999
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-8-27b/pricing/cachedInput",
-          "before": 0.09,
-          "after": 0.0039000000000000003
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-8-27b/pricing/input",
-          "before": 0.19999999999999998,
-          "after": 0.039
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=qwen3-8-27b/pricing/output",
-          "before": 2.5,
-          "after": 1.25
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=ternary-bonsai-2-9b",
-          "before": null,
-          "after": {
-            "exists": true,
-            "pricing": {
-              "modelId": "prism-ml/ternary-bonsai-2-9b",
-              "alias": "prism-ml/ternary-bonsai-2-9b",
-              "input": 0.08,
-              "cachedInput": 0.04,
-              "cacheWrite": null,
-              "output": 0.13
-            }
-          }
-        }
-      ]
-    }
-  ],
-  "pathFormat": "JSON Pointer fields; data/models arrays use @id=<escaped exact ID> selectors, not positional indices. Raw import diffs cover governed observations only; exact bytes are pinned separately.",
-  "roundingTolerance": "Zero unless a separately reviewed provider-specific tolerance is documented; no guessed tolerance.",
-  "sources": [
-    {
-      "id": "copilot-models",
-      "scope": "GitHub Copilot supported models; distinguish each documented client/channel",
-      "kind": "documentation",
-      "url": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
-      "finalUrl": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
-      "sha256": "0034581a85d9eba5adead31e65c25f04bac89a1d297cd43a92bf962b54875335",
-      "textSha256": "b36db12cfc6212b8d1c284bba5cf4acc9eb6b11b93a77d64b34965f566121b53",
-      "retrievedAt": "2026-10-28T12:53:14.525Z",
-      "status": "ok"
-    },
-    {
-      "id": "copilot-retirement",
-      "scope": "GitHub Copilot announced lifecycle dates, not immediate retirement",
-      "kind": "documentation",
-      "url": "https://docs.github.com/en/copilot/reference/ai-models/supported-models#model-retirement-history",
-      "finalUrl": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
-      "sha256": "0034581a85d9eba5adead31e65c25f04bac89a1d297cd43a92bf962b54875335",
-      "textSha256": "b36db12cfc6212b8d1c284bba5cf4acc9eb6b11b93a77d64b34965f566121b53",
-      "retrievedAt": "2026-10-28T12:53:14.552Z",
-      "status": "ok"
-    },
-    {
-      "id": "copilot-changelog",
-      "scope": "Copilot lifecycle announcements; follow only fetched official announcement links",
-      "kind": "documentation",
-      "url": "https://github.blog/changelog/label/copilot/",
-      "finalUrl": "https://github.blog/changelog/label/copilot/",
-      "sha256": "d927975b2526f259486f88c92ab32d5a9c82e02d4b9b4515d086d6867581b3b3",
-      "textSha256": "7f1491350d64890f184885160d1ea2edc3d747a4881ec59b09d533679b171f37",
-      "retrievedAt": "2026-10-28T12:53:14.602Z",
-      "status": "ok"
-    },
-    {
-      "id": "openai-models",
-      "scope": "OpenAI native API model IDs, limits and explicit protocol support, not Copilot deployability",
-      "kind": "documentation",
-      "url": "https://developers.openai.com/api/docs/models",
-      "finalUrl": "https://developers.openai.com/api/docs/models",
-      "sha256": "4d7093e6947246cfe5d5b70cdd790772905e2087c16d05de08ff7d60b9e055ab",
-      "textSha256": "22ca5fa9577feaa9e32d748488194cdee96aeaf26e68dfcd7b4a0aecb097afb2",
-      "retrievedAt": "2026-10-28T12:53:14.736Z",
-      "status": "ok"
-    },
-    {
-      "id": "openai-pricing",
-      "scope": "OpenAI native API published tariffs only, not Copilot or OpenRouter billing",
-      "kind": "documentation",
-      "url": "https://developers.openai.com/api/docs/pricing",
-      "finalUrl": "https://developers.openai.com/api/docs/pricing",
-      "sha256": "87658ee9a8f6593edd0840cd0017cd248643bdd280a6d2ccbc23d90d0288a5a0",
-      "textSha256": "feda7eb36006d2b3c766ede504c9c986db9552958528810a5600eac80c362327",
-      "retrievedAt": "2026-10-28T12:53:14.767Z",
-      "status": "ok"
-    },
-    {
-      "id": "openai-responses",
-      "scope": "OpenAI Responses API explicit support; no family-wide inference",
-      "kind": "documentation",
-      "url": "https://developers.openai.com/api/reference/responses/overview",
-      "finalUrl": "https://developers.openai.com/api/reference/responses/overview",
-      "sha256": "e2d790569f9c7dffe5c4da87e828a2731197aac43785ceb6ba9bba82df7139f8",
-      "textSha256": "d9330d389560a8549bc14d0612c3143f8d4608e1431e42fc9feec9b7b937048e",
-      "retrievedAt": "2026-10-28T12:53:14.804Z",
-      "status": "ok"
-    },
-    {
-      "id": "anthropic-models",
-      "scope": "Anthropic native API model IDs, documented efforts, limits and protocol support",
-      "kind": "documentation",
-      "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "finalUrl": "https://platform.claude.com/docs/en/models/overview",
-      "sha256": "33e8e7cc621cc8663e8e6999ef296ada31d130075b11797cf365aac5d30be7c7",
-      "textSha256": "c3f567beef6ff8d1f394123cc88c487ec68f5b9fc42a6335067f5933208130ef",
-      "retrievedAt": "2026-10-28T12:53:15.192Z",
-      "status": "ok"
-    },
-    {
-      "id": "anthropic-pricing",
-      "scope": "Anthropic native API tariffs only, not Copilot billing",
-      "kind": "documentation",
-      "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-      "finalUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
-      "sha256": "eadd81ef4422a5ed492c7b49ce614f4a4bd8e43a3b2f37776da45410b63b6ec8",
-      "textSha256": "f6d2c7f5a67819ed3f6a3430bcd956500c9470ae8233c7681875ae71e611837b",
-      "retrievedAt": "2026-10-28T12:53:15.675Z",
-      "status": "ok"
-    },
-    {
-      "id": "gemini-models",
-      "scope": "Google Gemini native API model limits and explicit capabilities, not Copilot deployability",
-      "kind": "documentation",
-      "url": "https://ai.google.dev/gemini-api/docs/models?hl=en",
-      "finalUrl": "https://ai.google.dev/gemini-api/docs/models?hl=en",
-      "sha256": "77828b7953fdeb5602bd20552659e6a8377d2a5074b5d3b99f4992ab8858da94",
-      "textSha256": "7c24fb7b46164edfc708d74fa69c102490280ef26dfc3dadd56fd2d009c376ce",
-      "retrievedAt": "2026-10-28T12:53:16.798Z",
-      "status": "ok"
-    },
-    {
-      "id": "xai-models",
-      "scope": "xAI native API model limits and tariffs, not Copilot billing or deployability",
-      "kind": "documentation",
-      "url": "https://docs.x.ai/developers/models",
-      "finalUrl": "https://docs.x.ai/developers/models",
-      "sha256": "218dd9ba48e51d7140fba39d5b74a04a302b0a020c61923d2fb8c93d15c04082",
-      "textSha256": "ddaa853ecbe9b2a3551d2f0c6b32ea8c1d4bd9338d3be8d15986a5960d26a31f",
-      "retrievedAt": "2026-10-28T12:53:16.882Z",
-      "status": "ok"
-    },
-    {
-      "id": "openrouter-models",
-      "scope": "Governed OpenRouter catalogue observation; source namespaces are NOT native-provider deployment/billing mappings",
-      "kind": "catalogue",
-      "url": "https://openrouter.ai/api/v1/models",
-      "finalUrl": "https://openrouter.ai/api/v1/models",
-      "sha256": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
-      "textSha256": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
-      "retrievedAt": "2026-10-28T12:53:16.953Z",
-      "status": "ok",
-      "import": {
-        "accepted": 438,
-        "rejected": 26,
-        "collisions": [],
-        "excluded": [
-          "~unbiased/pareto-latest",
-          "typesafe/jev-router",
-          "nvidia/switchyard",
-          "~deepseek/deepseek-pro-latest",
-          "~deepseek/deepseek-flash-latest",
-          "~openai/gpt-astra-latest",
-          "~openai/gpt-sol-latest",
-          "~openai/gpt-terra-latest",
-          "~openai/gpt-luna-latest",
-          "~z-ai/glm-flash-latest",
-          "~z-ai/glm-latest",
-          "~deepseek/deepseek-v4-flash-latest",
-          "openrouter/auto-beta",
-          "~x-ai/grok-latest",
-          "openrouter/fusion",
-          "~anthropic/claude-fable-latest",
-          "~anthropic/claude-haiku-latest",
-          "~openai/gpt-mini-latest",
-          "~google/gemini-pro-latest",
-          "~moonshotai/kimi-latest",
-          "~google/gemini-flash-latest",
-          "~anthropic/claude-sonnet-latest",
-          "~anthropic/claude-opus-latest",
-          "openrouter/pareto-code",
-          "openrouter/bodybuilder",
-          "openrouter/auto"
-        ]
-      }
-    }
-  ],
-  "changes": [
-    {
-      "file": "containers/api-proxy/models.dev.catalog.json",
-      "changes": [
         {
           "pointer": "/data/@id=deepseek~1deepseek-v4-flash-0731/maxCompletion",
           "before": 131072,
@@ -678,24 +49,19 @@
           "after": "0.000000894012"
         },
         {
-          "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/maxCompletion",
-          "before": 943718,
-          "after": 131072
-        },
-        {
           "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/completion",
           "before": "0.000001",
-          "after": "0.00000042"
+          "after": "0.0000005"
         },
         {
           "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/input_cache_read",
           "before": "0.000000015",
-          "after": "0.0000000042"
+          "after": "0.000000006"
         },
         {
           "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/prompt",
           "before": "0.00000002",
-          "after": "0.00000014"
+          "after": "0.000000045"
         },
         {
           "pointer": "/data/@id=google~1gemma-3-4b-it/maxCompletion",
@@ -836,6 +202,11 @@
           "after": null
         },
         {
+          "pointer": "/data/@id=ibm-granite~1granite-4.2-8b/pricing/completion",
+          "before": "0.00000025",
+          "after": "0.00000015"
+        },
+        {
           "pointer": "/data/@id=inclusionai~1ling-3.1-flash/context",
           "before": 262144,
           "after": 1000000
@@ -856,24 +227,94 @@
           "after": "2026-11-03"
         },
         {
-          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/maxCompletion",
-          "before": 117964,
-          "after": 16384
+          "pointer": "/data/@id=meta~1muse-spark-open/maxCompletion",
+          "before": 943718,
+          "after": 131072
         },
         {
-          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/completion",
-          "before": "0.00000008",
-          "after": "0.00000004"
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/0",
+          "before": "frequency_penalty",
+          "after": "include_reasoning"
         },
         {
-          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/input_cache_read",
-          "before": "0.000000025",
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/1",
+          "before": "include_reasoning",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/10",
+          "before": "structured_outputs",
           "after": null
         },
         {
-          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/prompt",
-          "before": "0.00000005",
-          "after": "0.00000002"
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/11",
+          "before": "temperature",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/12",
+          "before": "tool_choice",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/13",
+          "before": "tools",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/14",
+          "before": "top_k",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/2",
+          "before": "logprobs",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/3",
+          "before": "max_tokens",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/4",
+          "before": "presence_penalty",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/5",
+          "before": "reasoning",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/6",
+          "before": "repetition_penalty",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/7",
+          "before": "response_format",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/8",
+          "before": "seed",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/9",
+          "before": "stop",
+          "after": null
         },
         {
           "pointer": "/data/@id=mistralai~1codestral-2508:batch",
@@ -1067,6 +508,81 @@
           "after": null
         },
         {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/10",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/11",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/12",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/13",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/14",
+          "before": "top_k",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/2",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/3",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/4",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/5",
+          "before": "reasoning",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/6",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/7",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/8",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/9",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
           "pointer": "/data/@id=moonshotai~1kimi-k2.7-code/pricing/completion",
           "before": "0.00000335",
           "after": "0.0000031"
@@ -1077,14 +593,19 @@
           "after": "0.00000056"
         },
         {
+          "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/completion",
+          "before": "0.00002",
+          "after": "0.0000108"
+        },
+        {
           "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/input_cache_read",
           "before": "0.00000017",
-          "after": "0.00000019"
+          "after": "0.00000021"
         },
         {
           "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/prompt",
           "before": "0.00000018",
-          "after": "0.0000002"
+          "after": "0.000000239"
         },
         {
           "pointer": "/data/@id=moonshotai~1kimi-k3.1-pro/parameters/10",
@@ -1152,6 +673,21 @@
           "after": "0.000000012"
         },
         {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/context",
+          "before": 262144,
+          "after": 1048576
+        },
+        {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/maxCompletion",
+          "before": 235929,
+          "after": 262144
+        },
+        {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/providerContext",
+          "before": 262144,
+          "after": 1048576
+        },
+        {
           "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b:free",
           "before": {
             "id": "nvidia/nemotron-3-super-120b-a12b:free",
@@ -1185,6 +721,205 @@
             "expiration": null
           },
           "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/10",
+          "before": "temperature",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/11",
+          "before": "tool_choice",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/12",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/13",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/14",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/4",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/5",
+          "before": "presence_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/6",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/7",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/8",
+          "before": "stop",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/9",
+          "before": "structured_outputs",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4-turbo",
+          "before": {
+            "id": "openai/gpt-4-turbo",
+            "pricing": {
+              "completion": "0.00003",
+              "prompt": "0.00001"
+            },
+            "canonicalSlug": "openai/gpt-4-turbo",
+            "context": 128000,
+            "providerContext": 128000,
+            "maxCompletion": 4096,
+            "parameters": [
+              "frequency_penalty",
+              "logit_bias",
+              "logprobs",
+              "max_tokens",
+              "presence_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/1",
+          "before": "max_tokens",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/2",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/3",
+          "before": "seed",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/4",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/5",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/6",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/7",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/8",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/10",
+          "before": "structured_outputs",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/11",
+          "before": "temperature",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/12",
+          "before": "tool_choice",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/13",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/14",
+          "before": "top_logprobs",
+          "after": "web_search_options"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/15",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/16",
+          "before": "web_search_options",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/4",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/5",
+          "before": "prediction",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/6",
+          "before": "presence_penalty",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/7",
+          "before": "response_format",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/8",
+          "before": "seed",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/9",
+          "before": "stop",
+          "after": "temperature"
         },
         {
           "pointer": "/data/@id=openai~1gpt-6.1-terra",
@@ -1381,6 +1116,264 @@
           }
         },
         {
+          "pointer": "/data/@id=openai~1o1",
+          "before": {
+            "id": "openai/o1",
+            "pricing": {
+              "completion": "0.00006",
+              "input_cache_read": "0.0000075",
+              "prompt": "0.000015",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o1-2024-12-17",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o1-pro",
+          "before": {
+            "id": "openai/o1-pro",
+            "pricing": {
+              "completion": "0.0006",
+              "prompt": "0.00015",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o1-pro",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o3-mini",
+          "before": {
+            "id": "openai/o3-mini",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.00000055",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o3-mini-2025-01-31",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o3-mini-high",
+          "before": {
+            "id": "openai/o3-mini-high",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.00000055",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o3-mini-high-2025-01-31",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o4-mini",
+          "before": {
+            "id": "openai/o4-mini",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.000000275",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o4-mini-2025-04-16",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o4-mini-high",
+          "before": {
+            "id": "openai/o4-mini-high",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.000000275",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o4-mini-high-2025-04-16",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=particle-ai~1particle-1",
+          "before": null,
+          "after": {
+            "id": "particle-ai/particle-1",
+            "pricing": {
+              "completion": "0.000001",
+              "input_cache_read": "0.00000003",
+              "prompt": "0.00000025"
+            },
+            "canonicalSlug": "particle-ai/particle-1-20261027",
+            "context": 1048576,
+            "providerContext": 1048576,
+            "maxCompletion": 131072,
+            "parameters": [
+              "frequency_penalty",
+              "include_reasoning",
+              "logprobs",
+              "max_tokens",
+              "min_p",
+              "presence_penalty",
+              "reasoning",
+              "reasoning_effort",
+              "repetition_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_k",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          }
+        },
+        {
           "pointer": "/data/@id=prism-ml~1ternary-bonsai-2-9b",
           "before": null,
           "after": {
@@ -1427,6 +1420,207 @@
           "pointer": "/data/@id=qwen~1qwen3-30b-a3b-instruct-2507/pricing/input_cache_read",
           "before": null,
           "after": "0.0000001"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/10",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/11",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/12",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/13",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/14",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/15",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/16",
+          "before": "top_a",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/17",
+          "before": "top_k",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/18",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/19",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/3",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/4",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/5",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/6",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/7",
+          "before": "reasoning",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/8",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/9",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/10",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/11",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/12",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/13",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/14",
+          "before": "top_k",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/2",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/3",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/4",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/5",
+          "before": "presence_penalty",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/6",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/7",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/8",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/9",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-next-80b-a3b-thinking",
+          "before": {
+            "id": "qwen/qwen3-next-80b-a3b-thinking",
+            "pricing": {
+              "completion": "0.0000012",
+              "prompt": "0.00000015"
+            },
+            "canonicalSlug": "qwen/qwen3-next-80b-a3b-thinking-2509",
+            "context": 262144,
+            "providerContext": 262144,
+            "maxCompletion": 235929,
+            "parameters": [
+              "frequency_penalty",
+              "include_reasoning",
+              "logprobs",
+              "max_tokens",
+              "presence_penalty",
+              "reasoning",
+              "repetition_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_k",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
         },
         {
           "pointer": "/data/@id=qwen~1qwen3.5-27b/maxCompletion",
@@ -1494,6 +1688,101 @@
           "after": "0.000000039"
         },
         {
+          "pointer": "/data/@id=stepfun~1step-5-preview/context",
+          "before": 1048576,
+          "after": 1000000
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/10",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/11",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/12",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/13",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/14",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/15",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/16",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/17",
+          "before": "top_k",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/18",
+          "before": "top_logprobs",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/19",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/2",
+          "before": "logit_bias",
+          "after": "logprobs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/3",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/4",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/5",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/6",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/7",
+          "before": "reasoning",
+          "after": "reasoning_effort"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/8",
+          "before": "reasoning_effort",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/9",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
           "pointer": "/data/@id=upstage~1solar-pro-3/expiration",
           "before": null,
           "after": "2026-10-30"
@@ -1549,14 +1838,54 @@
           "after": 262144
         },
         {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/completion",
+          "before": "0.0000022",
+          "after": "0.000002"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/input_cache_read",
+          "before": "0.00000011",
+          "after": "0.0000001"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/prompt",
+          "before": "0.00000055",
+          "after": "0.0000005"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/providerContext",
+          "before": 204800,
+          "after": 202752
+        },
+        {
           "pointer": "/data/@id=z-ai~1glm-5.2/pricing/input_cache_read",
           "before": "0.000000033",
-          "after": "0.000000013"
+          "after": "0.000000005"
         },
         {
           "pointer": "/data/@id=z-ai~1glm-5.2/pricing/prompt",
           "before": "0.0000000341",
-          "after": "0.000000014"
+          "after": "0.000000006"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/maxCompletion",
+          "before": 943717,
+          "after": 131072
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/pricing/completion",
+          "before": "0.0000005",
+          "after": "0.0000000742"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/pricing/prompt",
+          "before": "0.00000015",
+          "after": "0.0000000457"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/providerContext",
+          "before": 1048575,
+          "after": 1048576
         },
         {
           "pointer": "/runtimeResolution/@lookup=codestral-2508:batch",
@@ -1576,12 +1905,12 @@
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/cachedInput",
           "before": 0.015,
-          "after": 0.011399999999999999
+          "after": 0.0231
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/input",
           "before": 0.02,
-          "after": 0.0115
+          "after": 0.0233
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/output",
@@ -1591,27 +1920,27 @@
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/cachedInput",
           "before": 0.13,
-          "after": 0.25
+          "after": 0.09999999999999999
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/input",
           "before": 0.133,
-          "after": 0.2542
+          "after": 0.1035
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/cachedInput",
           "before": 0.015,
-          "after": 0.004200000000000001
+          "after": 0.006
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/input",
           "before": 0.02,
-          "after": 0.14
+          "after": 0.045
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/output",
           "before": 1,
-          "after": 0.42
+          "after": 0.5
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-0731/pricing/cachedInput",
@@ -1631,12 +1960,12 @@
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/input",
           "before": 0.0422,
-          "after": 0.0475
+          "after": 0.057
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/output",
           "before": 0.16369999999999998,
-          "after": 0.1568
+          "after": 0.1341
         },
         {
           "pointer": "/runtimeResolution/@lookup=deepseek-v4-pro/pricing/cachedInput",
@@ -1669,29 +1998,69 @@
           "after": 0.09999999999999999
         },
         {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/cachedInput",
+          "before": 0.11,
+          "after": 0.09999999999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/input",
+          "before": 0.55,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/output",
+          "before": 2.2,
+          "after": 2
+        },
+        {
           "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/cachedInput",
           "before": 0.032999999999999995,
-          "after": 0.013000000000000001
+          "after": 0.005
         },
         {
           "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/input",
           "before": 0.0341,
-          "after": 0.014
+          "after": 0.006
         },
         {
-          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/cachedInput",
-          "before": 0.03,
-          "after": 0.0237
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/input",
+          "before": 0.15,
+          "after": 0.0457
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/output",
+          "before": 0.5,
+          "after": 0.0742
         },
         {
           "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/input",
           "before": 0.041299999999999996,
-          "after": 0.0237
+          "after": 0.0457
         },
         {
           "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/output",
           "before": 0.0758,
-          "after": 0.1324
+          "after": 0.0742
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/cachedInput",
+          "before": 1,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/input",
+          "before": 10,
+          "after": 5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/modelId",
+          "before": "openai/gpt-4-turbo",
+          "after": "openai/gpt-4-turbo:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/output",
+          "before": 30,
+          "after": 15
         },
         {
           "pointer": "/runtimeResolution/@lookup=gpt-6-1-terra",
@@ -1789,6 +2158,11 @@
           "after": null
         },
         {
+          "pointer": "/runtimeResolution/@lookup=granite-4-2-8b/pricing/output",
+          "before": 0.25,
+          "after": 0.15
+        },
+        {
           "pointer": "/runtimeResolution/@lookup=hermes-4-405b/pricing/cachedInput",
           "before": 0.1,
           "after": 0.19999999999999998
@@ -1806,42 +2180,32 @@
         {
           "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/cachedInput",
           "before": 0.16999999999999998,
-          "after": 0.19
+          "after": 0.21
         },
         {
           "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/input",
           "before": 0.18,
-          "after": 0.19999999999999998
+          "after": 0.23900000000000002
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/output",
+          "before": 20,
+          "after": 10.8
         },
         {
           "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/cachedInput",
           "before": 0.16999999999999998,
-          "after": 0.16
+          "after": 0.18
         },
         {
           "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/input",
           "before": 0.18,
-          "after": 0.16049999999999998
+          "after": 0.18239999999999998
         },
         {
           "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/output",
           "before": 20,
-          "after": 8.940000000000001
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/cachedInput",
-          "before": 0.024999999999999998,
-          "after": 0.002
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/input",
-          "before": 0.049999999999999996,
-          "after": 0.02
-        },
-        {
-          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/output",
-          "before": 0.08,
-          "after": 0.04
+          "after": 9.338799999999999
         },
         {
           "pointer": "/runtimeResolution/@lookup=mimo-v2-5/pricing/cachedInput",
@@ -1954,6 +2318,131 @@
           "after": null
         },
         {
+          "pointer": "/runtimeResolution/@lookup=o1",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1",
+              "alias": "openai/o1",
+              "input": 15,
+              "cachedInput": 7.5,
+              "cacheWrite": null,
+              "output": 60
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o1-pro",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1-pro",
+              "alias": "openai/o1-pro",
+              "input": 150,
+              "cachedInput": 15,
+              "cacheWrite": null,
+              "output": 600
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/alias",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini-2025-01-31"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/cachedInput",
+          "before": 0.55,
+          "after": 0.275
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/modelId",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o3-mini-high",
+              "alias": "openai/o3-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.55,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/alias",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini-2025-04-16"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/cachedInput",
+          "before": 0.275,
+          "after": 0.1375
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/modelId",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o4-mini-high",
+              "alias": "openai/o4-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.275,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=particle-1",
+          "before": null,
+          "after": {
+            "exists": true,
+            "pricing": {
+              "modelId": "particle-ai/particle-1",
+              "alias": "particle-ai/particle-1",
+              "input": 0.25,
+              "cachedInput": 0.03,
+              "cacheWrite": null,
+              "output": 1
+            }
+          }
+        },
+        {
           "pointer": "/runtimeResolution/@lookup=qwen3-30b-a3b-instruct-2507/pricing/cachedInput",
           "before": 0.01,
           "after": 0.09999999999999999
@@ -2014,6 +2503,36 @@
           "after": 1.25
         },
         {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking-2509",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking-2509",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        },
+        {
           "pointer": "/runtimeResolution/@lookup=ternary-bonsai-2-9b",
           "before": null,
           "after": {
@@ -2028,30 +2547,1906 @@
             }
           }
         }
+      ]
+    },
+    {
+      "file": "shared/model-information/imported/legacy-models-dev.metadata.json",
+      "changes": [
+        {
+          "pointer": "/retrievedAt",
+          "before": "2026-10-26T14:35:30.099Z",
+          "after": "2026-10-29T12:53:38.465Z"
+        },
+        {
+          "pointer": "/revision",
+          "before": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
+          "after": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e"
+        },
+        {
+          "pointer": "/sha256",
+          "before": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
+          "after": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e"
+        }
+      ]
+    }
+  ],
+  "runtimeConsumerEffects": [
+    {
+      "file": "containers/api-proxy/models.dev.catalog.json",
+      "changes": [
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/cachedInput",
+          "before": 0.011399999999999999,
+          "after": 0.0231
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/input",
+          "before": 0.0115,
+          "after": 0.0233
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/cachedInput",
+          "before": 0.25,
+          "after": 0.09999999999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/input",
+          "before": 0.2542,
+          "after": 0.1035
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/cachedInput",
+          "before": 0.004200000000000001,
+          "after": 0.006
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/input",
+          "before": 0.14,
+          "after": 0.045
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/output",
+          "before": 0.42,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/input",
+          "before": 0.0475,
+          "after": 0.057
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/output",
+          "before": 0.1568,
+          "after": 0.1341
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/cachedInput",
+          "before": 0.11,
+          "after": 0.09999999999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/input",
+          "before": 0.55,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/output",
+          "before": 2.2,
+          "after": 2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/cachedInput",
+          "before": 0.013000000000000001,
+          "after": 0.005
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/input",
+          "before": 0.014,
+          "after": 0.006
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/input",
+          "before": 0.15,
+          "after": 0.0457
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/output",
+          "before": 0.5,
+          "after": 0.0742
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/cachedInput",
+          "before": 0.0237,
+          "after": 0.03
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/input",
+          "before": 0.0237,
+          "after": 0.0457
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/output",
+          "before": 0.1324,
+          "after": 0.0742
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/cachedInput",
+          "before": 1,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/input",
+          "before": 10,
+          "after": 5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/modelId",
+          "before": "openai/gpt-4-turbo",
+          "after": "openai/gpt-4-turbo:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/output",
+          "before": 30,
+          "after": 15
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=granite-4-2-8b/pricing/output",
+          "before": 0.25,
+          "after": 0.15
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/cachedInput",
+          "before": 0.19,
+          "after": 0.21
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/input",
+          "before": 0.19999999999999998,
+          "after": 0.23900000000000002
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/output",
+          "before": 20,
+          "after": 10.8
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/cachedInput",
+          "before": 0.16,
+          "after": 0.18
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/input",
+          "before": 0.16049999999999998,
+          "after": 0.18239999999999998
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/output",
+          "before": 8.940000000000001,
+          "after": 9.338799999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/cachedInput",
+          "before": 0.002,
+          "after": 0.024999999999999998
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/input",
+          "before": 0.02,
+          "after": 0.049999999999999996
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/output",
+          "before": 0.04,
+          "after": 0.08
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o1",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1",
+              "alias": "openai/o1",
+              "input": 15,
+              "cachedInput": 7.5,
+              "cacheWrite": null,
+              "output": 60
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o1-pro",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1-pro",
+              "alias": "openai/o1-pro",
+              "input": 150,
+              "cachedInput": 15,
+              "cacheWrite": null,
+              "output": 600
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/alias",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini-2025-01-31"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/cachedInput",
+          "before": 0.55,
+          "after": 0.275
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/modelId",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o3-mini-high",
+              "alias": "openai/o3-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.55,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/alias",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini-2025-04-16"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/cachedInput",
+          "before": 0.275,
+          "after": 0.1375
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/modelId",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o4-mini-high",
+              "alias": "openai/o4-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.275,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=particle-1",
+          "before": null,
+          "after": {
+            "exists": true,
+            "pricing": {
+              "modelId": "particle-ai/particle-1",
+              "alias": "particle-ai/particle-1",
+              "input": 0.25,
+              "cachedInput": 0.03,
+              "cacheWrite": null,
+              "output": 1
+            }
+          }
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking-2509",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking-2509",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        }
+      ]
+    }
+  ],
+  "pathFormat": "JSON Pointer fields; data/models arrays use @id=<escaped exact ID> selectors, not positional indices. Raw import diffs cover governed observations only; exact bytes are pinned separately.",
+  "roundingTolerance": "Zero unless a separately reviewed provider-specific tolerance is documented; no guessed tolerance.",
+  "sources": [
+    {
+      "id": "copilot-models",
+      "scope": "GitHub Copilot supported models; distinguish each documented client/channel",
+      "kind": "documentation",
+      "url": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
+      "finalUrl": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
+      "sha256": "ddf50ec0204bebac7bce8efc3759eb7a0128d5c32ed3c68eca869ea10e48382e",
+      "textSha256": "11a418040a1849914aea95b62ca199143122d02a23e441042e5c91bb0d8e4406",
+      "retrievedAt": "2026-10-29T12:53:35.955Z",
+      "status": "ok"
+    },
+    {
+      "id": "copilot-retirement",
+      "scope": "GitHub Copilot announced lifecycle dates, not immediate retirement",
+      "kind": "documentation",
+      "url": "https://docs.github.com/en/copilot/reference/ai-models/supported-models#model-retirement-history",
+      "finalUrl": "https://docs.github.com/en/copilot/reference/ai-models/supported-models",
+      "sha256": "ddf50ec0204bebac7bce8efc3759eb7a0128d5c32ed3c68eca869ea10e48382e",
+      "textSha256": "11a418040a1849914aea95b62ca199143122d02a23e441042e5c91bb0d8e4406",
+      "retrievedAt": "2026-10-29T12:53:35.998Z",
+      "status": "ok"
+    },
+    {
+      "id": "copilot-changelog",
+      "scope": "Copilot lifecycle announcements; follow only fetched official announcement links",
+      "kind": "documentation",
+      "url": "https://github.blog/changelog/label/copilot/",
+      "finalUrl": "https://github.blog/changelog/label/copilot/",
+      "sha256": "36ae6be96ee4e57e369c545a50c19d18d9d8599475df449809c9827193e165c2",
+      "textSha256": "767a478b4067b1a3dc95fcaa1b04d81afa356f2bca2eead2f391cb4c2a150840",
+      "retrievedAt": "2026-10-29T12:53:36.121Z",
+      "status": "ok"
+    },
+    {
+      "id": "openai-models",
+      "scope": "OpenAI native API model IDs, limits and explicit protocol support, not Copilot deployability",
+      "kind": "documentation",
+      "url": "https://developers.openai.com/api/docs/models",
+      "finalUrl": "https://developers.openai.com/api/docs/models",
+      "sha256": "9759bf2e3cfead69b5da753daf2dd65b2156b74dc0a2b66b5b27d049c244ce91",
+      "textSha256": "04047d47e3e6980da70a270706d6dedc255f89d4d8a86ebbcf546a5831cf030a",
+      "retrievedAt": "2026-10-29T12:53:36.351Z",
+      "status": "ok"
+    },
+    {
+      "id": "openai-pricing",
+      "scope": "OpenAI native API published tariffs only, not Copilot or OpenRouter billing",
+      "kind": "documentation",
+      "url": "https://developers.openai.com/api/docs/pricing",
+      "finalUrl": "https://developers.openai.com/api/docs/pricing",
+      "sha256": "89153124d9877f76215e5976b6a5b40eedcb6aa9063e0a11c29ad2fe1e48410b",
+      "textSha256": "5f505846ee9025f4b6d54124ba0da6b1d5be0cc4573902f901f04aaf1988da86",
+      "retrievedAt": "2026-10-29T12:53:36.402Z",
+      "status": "ok"
+    },
+    {
+      "id": "openai-responses",
+      "scope": "OpenAI Responses API explicit support; no family-wide inference",
+      "kind": "documentation",
+      "url": "https://developers.openai.com/api/reference/responses/overview",
+      "finalUrl": "https://developers.openai.com/api/reference/responses/overview",
+      "sha256": "8e05e0817ef9623b8a22a1c80708e2aba61e9875b35f4c41332c4e90b49723e2",
+      "textSha256": "d9330d389560a8549bc14d0612c3143f8d4608e1431e42fc9feec9b7b937048e",
+      "retrievedAt": "2026-10-29T12:53:36.456Z",
+      "status": "ok"
+    },
+    {
+      "id": "anthropic-models",
+      "scope": "Anthropic native API model IDs, documented efforts, limits and protocol support",
+      "kind": "documentation",
+      "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "finalUrl": "https://platform.claude.com/docs/en/models/overview",
+      "sha256": "23d730655ee2d86125e11fc2dc2a2870fe301735d6109d27bcf34fde2640f9c0",
+      "textSha256": "c3f567beef6ff8d1f394123cc88c487ec68f5b9fc42a6335067f5933208130ef",
+      "retrievedAt": "2026-10-29T12:53:36.964Z",
+      "status": "ok"
+    },
+    {
+      "id": "anthropic-pricing",
+      "scope": "Anthropic native API tariffs only, not Copilot billing",
+      "kind": "documentation",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "finalUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "sha256": "4fcb897dddba5162206354900445a83665e7292e4103eb44c8760be0f5ef8ce7",
+      "textSha256": "62afeeee824f1cf3bf2f2a23db396a3711f6103c4218ea01a840bca4ae44e983",
+      "retrievedAt": "2026-10-29T12:53:37.608Z",
+      "status": "ok"
+    },
+    {
+      "id": "gemini-models",
+      "scope": "Google Gemini native API model limits and explicit capabilities, not Copilot deployability",
+      "kind": "documentation",
+      "url": "https://ai.google.dev/gemini-api/docs/models?hl=en",
+      "finalUrl": "https://ai.google.dev/gemini-api/docs/models?hl=en",
+      "sha256": "5bf8f8cc42331e057d9571316e5ba80d647489c823f48361ddfdea2dc509cf0d",
+      "textSha256": "2781c01da08ccb7885ea2355f227a39e394b6222b62470e885656b01976cd245",
+      "retrievedAt": "2026-10-29T12:53:38.144Z",
+      "status": "ok"
+    },
+    {
+      "id": "xai-models",
+      "scope": "xAI native API model limits and tariffs, not Copilot billing or deployability",
+      "kind": "documentation",
+      "url": "https://docs.x.ai/developers/models",
+      "finalUrl": "https://docs.x.ai/developers/models",
+      "sha256": "24c35b25323cf640255892c949a68ee6705712542c8b3fa7cc563c3b1b0302d6",
+      "textSha256": "ddaa853ecbe9b2a3551d2f0c6b32ea8c1d4bd9338d3be8d15986a5960d26a31f",
+      "retrievedAt": "2026-10-29T12:53:38.385Z",
+      "status": "ok"
+    },
+    {
+      "id": "openrouter-models",
+      "scope": "Governed OpenRouter catalogue observation; source namespaces are NOT native-provider deployment/billing mappings",
+      "kind": "catalogue",
+      "url": "https://openrouter.ai/api/v1/models",
+      "finalUrl": "https://openrouter.ai/api/v1/models",
+      "sha256": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e",
+      "textSha256": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e",
+      "retrievedAt": "2026-10-29T12:53:38.465Z",
+      "status": "ok",
+      "import": {
+        "accepted": 431,
+        "rejected": 26,
+        "collisions": [],
+        "excluded": [
+          "~unbiased/pareto-latest",
+          "typesafe/jev-router",
+          "nvidia/switchyard",
+          "~deepseek/deepseek-pro-latest",
+          "~deepseek/deepseek-flash-latest",
+          "~openai/gpt-astra-latest",
+          "~openai/gpt-sol-latest",
+          "~openai/gpt-terra-latest",
+          "~openai/gpt-luna-latest",
+          "~z-ai/glm-flash-latest",
+          "~z-ai/glm-latest",
+          "~deepseek/deepseek-v4-flash-latest",
+          "openrouter/auto-beta",
+          "~x-ai/grok-latest",
+          "openrouter/fusion",
+          "~anthropic/claude-fable-latest",
+          "~anthropic/claude-haiku-latest",
+          "~openai/gpt-mini-latest",
+          "~google/gemini-pro-latest",
+          "~moonshotai/kimi-latest",
+          "~google/gemini-flash-latest",
+          "~anthropic/claude-sonnet-latest",
+          "~anthropic/claude-opus-latest",
+          "openrouter/pareto-code",
+          "openrouter/bodybuilder",
+          "openrouter/auto"
+        ]
+      }
+    }
+  ],
+  "changes": [
+    {
+      "file": "containers/api-proxy/models.dev.catalog.json",
+      "changes": [
+        {
+          "pointer": "/data/@id=deepseek~1deepseek-chat-v3.1/maxCompletion",
+          "before": 32768,
+          "after": 147456
+        },
+        {
+          "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/maxCompletion",
+          "before": 131072,
+          "after": 943718
+        },
+        {
+          "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/completion",
+          "before": "0.00000042",
+          "after": "0.0000005"
+        },
+        {
+          "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/input_cache_read",
+          "before": "0.0000000042",
+          "after": "0.000000006"
+        },
+        {
+          "pointer": "/data/@id=deepseek~1deepseek-v4.1-flash/pricing/prompt",
+          "before": "0.00000014",
+          "after": "0.000000045"
+        },
+        {
+          "pointer": "/data/@id=ibm-granite~1granite-4.2-8b/pricing/completion",
+          "before": "0.00000025",
+          "after": "0.00000015"
+        },
+        {
+          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/maxCompletion",
+          "before": 16384,
+          "after": 117964
+        },
+        {
+          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/completion",
+          "before": "0.00000004",
+          "after": "0.00000008"
+        },
+        {
+          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/input_cache_read",
+          "before": null,
+          "after": "0.000000025"
+        },
+        {
+          "pointer": "/data/@id=meta-llama~1llama-3.1-8b-instruct/pricing/prompt",
+          "before": "0.00000002",
+          "after": "0.00000005"
+        },
+        {
+          "pointer": "/data/@id=meta~1muse-spark-open/maxCompletion",
+          "before": 943718,
+          "after": 131072
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/0",
+          "before": "frequency_penalty",
+          "after": "include_reasoning"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/1",
+          "before": "include_reasoning",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/10",
+          "before": "structured_outputs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/11",
+          "before": "temperature",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/12",
+          "before": "tool_choice",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/13",
+          "before": "tools",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/14",
+          "before": "top_k",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/2",
+          "before": "logprobs",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/3",
+          "before": "max_tokens",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/4",
+          "before": "presence_penalty",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/5",
+          "before": "reasoning",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/6",
+          "before": "repetition_penalty",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/7",
+          "before": "response_format",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/8",
+          "before": "seed",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=minimax~1minimax-m2/parameters/9",
+          "before": "stop",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/10",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/11",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/12",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/13",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/14",
+          "before": "top_k",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/2",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/3",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/4",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/5",
+          "before": "reasoning",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/6",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/7",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/8",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k2-thinking/parameters/9",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/completion",
+          "before": "0.00002",
+          "after": "0.0000108"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/input_cache_read",
+          "before": "0.00000019",
+          "after": "0.00000021"
+        },
+        {
+          "pointer": "/data/@id=moonshotai~1kimi-k3/pricing/prompt",
+          "before": "0.0000002",
+          "after": "0.000000239"
+        },
+        {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/context",
+          "before": 262144,
+          "after": 1048576
+        },
+        {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/maxCompletion",
+          "before": 235929,
+          "after": 262144
+        },
+        {
+          "pointer": "/data/@id=nvidia~1nemotron-3-super-120b-a12b/providerContext",
+          "before": 262144,
+          "after": 1048576
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/10",
+          "before": "temperature",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/11",
+          "before": "tool_choice",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/12",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/13",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/14",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/4",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/5",
+          "before": "presence_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/6",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/7",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/8",
+          "before": "stop",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4/parameters/9",
+          "before": "structured_outputs",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4-turbo",
+          "before": {
+            "id": "openai/gpt-4-turbo",
+            "pricing": {
+              "completion": "0.00003",
+              "prompt": "0.00001"
+            },
+            "canonicalSlug": "openai/gpt-4-turbo",
+            "context": 128000,
+            "providerContext": 128000,
+            "maxCompletion": 4096,
+            "parameters": [
+              "frequency_penalty",
+              "logit_bias",
+              "logprobs",
+              "max_tokens",
+              "presence_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/1",
+          "before": "max_tokens",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/2",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/3",
+          "before": "seed",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/4",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/5",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/6",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/7",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4.1-nano/parameters/8",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/10",
+          "before": "structured_outputs",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/11",
+          "before": "temperature",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/12",
+          "before": "tool_choice",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/13",
+          "before": "tools",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/14",
+          "before": "top_logprobs",
+          "after": "web_search_options"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/15",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/16",
+          "before": "web_search_options",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/4",
+          "before": "max_tokens",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/5",
+          "before": "prediction",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/6",
+          "before": "presence_penalty",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/7",
+          "before": "response_format",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/8",
+          "before": "seed",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=openai~1gpt-4o-2024-05-13/parameters/9",
+          "before": "stop",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=openai~1o1",
+          "before": {
+            "id": "openai/o1",
+            "pricing": {
+              "completion": "0.00006",
+              "input_cache_read": "0.0000075",
+              "prompt": "0.000015",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o1-2024-12-17",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o1-pro",
+          "before": {
+            "id": "openai/o1-pro",
+            "pricing": {
+              "completion": "0.0006",
+              "prompt": "0.00015",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o1-pro",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o3-mini",
+          "before": {
+            "id": "openai/o3-mini",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.00000055",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o3-mini-2025-01-31",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o3-mini-high",
+          "before": {
+            "id": "openai/o3-mini-high",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.00000055",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o3-mini-high-2025-01-31",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o4-mini",
+          "before": {
+            "id": "openai/o4-mini",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.000000275",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o4-mini-2025-04-16",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=openai~1o4-mini-high",
+          "before": {
+            "id": "openai/o4-mini-high",
+            "pricing": {
+              "completion": "0.0000044",
+              "input_cache_read": "0.000000275",
+              "prompt": "0.0000011",
+              "web_search": "0.01"
+            },
+            "canonicalSlug": "openai/o4-mini-high-2025-04-16",
+            "context": 200000,
+            "providerContext": 200000,
+            "maxCompletion": 100000,
+            "parameters": [
+              "include_reasoning",
+              "max_tokens",
+              "reasoning",
+              "reasoning_effort",
+              "response_format",
+              "seed",
+              "structured_outputs",
+              "tool_choice",
+              "tools"
+            ],
+            "inputModalities": [
+              "file",
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=particle-ai~1particle-1",
+          "before": null,
+          "after": {
+            "id": "particle-ai/particle-1",
+            "pricing": {
+              "completion": "0.000001",
+              "input_cache_read": "0.00000003",
+              "prompt": "0.00000025"
+            },
+            "canonicalSlug": "particle-ai/particle-1-20261027",
+            "context": 1048576,
+            "providerContext": 1048576,
+            "maxCompletion": 131072,
+            "parameters": [
+              "frequency_penalty",
+              "include_reasoning",
+              "logprobs",
+              "max_tokens",
+              "min_p",
+              "presence_penalty",
+              "reasoning",
+              "reasoning_effort",
+              "repetition_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_k",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "image",
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          }
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/10",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/11",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/12",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/13",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/14",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/15",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/16",
+          "before": "top_a",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/17",
+          "before": "top_k",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/18",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/19",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/3",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/4",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/5",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/6",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/7",
+          "before": "reasoning",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/8",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-32b/parameters/9",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/10",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/11",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/12",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/13",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/14",
+          "before": "top_k",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/15",
+          "before": "top_logprobs",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/16",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/2",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/3",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/4",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/5",
+          "before": "presence_penalty",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/6",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/7",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/8",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-coder/parameters/9",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=qwen~1qwen3-next-80b-a3b-thinking",
+          "before": {
+            "id": "qwen/qwen3-next-80b-a3b-thinking",
+            "pricing": {
+              "completion": "0.0000012",
+              "prompt": "0.00000015"
+            },
+            "canonicalSlug": "qwen/qwen3-next-80b-a3b-thinking-2509",
+            "context": 262144,
+            "providerContext": 262144,
+            "maxCompletion": 235929,
+            "parameters": [
+              "frequency_penalty",
+              "include_reasoning",
+              "logprobs",
+              "max_tokens",
+              "presence_penalty",
+              "reasoning",
+              "repetition_penalty",
+              "response_format",
+              "seed",
+              "stop",
+              "structured_outputs",
+              "temperature",
+              "tool_choice",
+              "tools",
+              "top_k",
+              "top_logprobs",
+              "top_p"
+            ],
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "expiration": null
+          },
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/context",
+          "before": 1048576,
+          "after": 1000000
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/10",
+          "before": "response_format",
+          "after": "seed"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/11",
+          "before": "seed",
+          "after": "stop"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/12",
+          "before": "stop",
+          "after": "structured_outputs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/13",
+          "before": "structured_outputs",
+          "after": "temperature"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/14",
+          "before": "temperature",
+          "after": "tool_choice"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/15",
+          "before": "tool_choice",
+          "after": "tools"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/16",
+          "before": "tools",
+          "after": "top_k"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/17",
+          "before": "top_k",
+          "after": "top_logprobs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/18",
+          "before": "top_logprobs",
+          "after": "top_p"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/19",
+          "before": "top_p",
+          "after": null
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/2",
+          "before": "logit_bias",
+          "after": "logprobs"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/3",
+          "before": "logprobs",
+          "after": "max_tokens"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/4",
+          "before": "max_tokens",
+          "after": "min_p"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/5",
+          "before": "min_p",
+          "after": "presence_penalty"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/6",
+          "before": "presence_penalty",
+          "after": "reasoning"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/7",
+          "before": "reasoning",
+          "after": "reasoning_effort"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/8",
+          "before": "reasoning_effort",
+          "after": "repetition_penalty"
+        },
+        {
+          "pointer": "/data/@id=stepfun~1step-5-preview/parameters/9",
+          "before": "repetition_penalty",
+          "after": "response_format"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/completion",
+          "before": "0.0000022",
+          "after": "0.000002"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/input_cache_read",
+          "before": "0.00000011",
+          "after": "0.0000001"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/pricing/prompt",
+          "before": "0.00000055",
+          "after": "0.0000005"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-4.6/providerContext",
+          "before": 204800,
+          "after": 202752
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.2/pricing/input_cache_read",
+          "before": "0.000000013",
+          "after": "0.000000005"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.2/pricing/prompt",
+          "before": "0.000000014",
+          "after": "0.000000006"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/maxCompletion",
+          "before": 943717,
+          "after": 131072
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/pricing/completion",
+          "before": "0.0000005",
+          "after": "0.0000000742"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/pricing/prompt",
+          "before": "0.00000015",
+          "after": "0.0000000457"
+        },
+        {
+          "pointer": "/data/@id=z-ai~1glm-5.3-flash/providerContext",
+          "before": 1048575,
+          "after": 1048576
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/cachedInput",
+          "before": 0.011399999999999999,
+          "after": 0.0231
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-flash-latest/pricing/input",
+          "before": 0.0115,
+          "after": 0.0233
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/cachedInput",
+          "before": 0.25,
+          "after": 0.09999999999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-pro-latest/pricing/input",
+          "before": 0.2542,
+          "after": 0.1035
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/cachedInput",
+          "before": 0.004200000000000001,
+          "after": 0.006
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/input",
+          "before": 0.14,
+          "after": 0.045
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-1-flash/pricing/output",
+          "before": 0.42,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/input",
+          "before": 0.0475,
+          "after": 0.057
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=deepseek-v4-flash-latest/pricing/output",
+          "before": 0.1568,
+          "after": 0.1341
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/cachedInput",
+          "before": 0.11,
+          "after": 0.09999999999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/input",
+          "before": 0.55,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-4-6/pricing/output",
+          "before": 2.2,
+          "after": 2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/cachedInput",
+          "before": 0.013000000000000001,
+          "after": 0.005
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-2/pricing/input",
+          "before": 0.014,
+          "after": 0.006
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/input",
+          "before": 0.15,
+          "after": 0.0457
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-5-3-flash/pricing/output",
+          "before": 0.5,
+          "after": 0.0742
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/cachedInput",
+          "before": 0.0237,
+          "after": 0.03
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/input",
+          "before": 0.0237,
+          "after": 0.0457
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=glm-flash-latest/pricing/output",
+          "before": 0.1324,
+          "after": 0.0742
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/cachedInput",
+          "before": 1,
+          "after": 0.5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/input",
+          "before": 10,
+          "after": 5
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/modelId",
+          "before": "openai/gpt-4-turbo",
+          "after": "openai/gpt-4-turbo:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=gpt-4-turbo/pricing/output",
+          "before": 30,
+          "after": 15
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=granite-4-2-8b/pricing/output",
+          "before": 0.25,
+          "after": 0.15
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/cachedInput",
+          "before": 0.19,
+          "after": 0.21
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/input",
+          "before": 0.19999999999999998,
+          "after": 0.23900000000000002
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-k3/pricing/output",
+          "before": 20,
+          "after": 10.8
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/cachedInput",
+          "before": 0.16,
+          "after": 0.18
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/input",
+          "before": 0.16049999999999998,
+          "after": 0.18239999999999998
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=kimi-latest/pricing/output",
+          "before": 8.940000000000001,
+          "after": 9.338799999999999
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/cachedInput",
+          "before": 0.002,
+          "after": 0.024999999999999998
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/input",
+          "before": 0.02,
+          "after": 0.049999999999999996
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=llama-3-1-8b-instruct/pricing/output",
+          "before": 0.04,
+          "after": 0.08
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o1",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1",
+              "alias": "openai/o1",
+              "input": 15,
+              "cachedInput": 7.5,
+              "cacheWrite": null,
+              "output": 60
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o1-pro",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o1-pro",
+              "alias": "openai/o1-pro",
+              "input": 150,
+              "cachedInput": 15,
+              "cacheWrite": null,
+              "output": 600
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/alias",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini-2025-01-31"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/cachedInput",
+          "before": 0.55,
+          "after": 0.275
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/modelId",
+          "before": "openai/o3-mini",
+          "after": "openai/o3-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o3-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o3-mini-high",
+              "alias": "openai/o3-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.55,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/alias",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini-2025-04-16"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/cachedInput",
+          "before": 0.275,
+          "after": 0.1375
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/input",
+          "before": 1.1,
+          "after": 0.55
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/modelId",
+          "before": "openai/o4-mini",
+          "after": "openai/o4-mini:batch"
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini/pricing/output",
+          "before": 4.4,
+          "after": 2.2
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=o4-mini-high",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "openai/o4-mini-high",
+              "alias": "openai/o4-mini-high",
+              "input": 1.1,
+              "cachedInput": 0.275,
+              "cacheWrite": null,
+              "output": 4.4
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=particle-1",
+          "before": null,
+          "after": {
+            "exists": true,
+            "pricing": {
+              "modelId": "particle-ai/particle-1",
+              "alias": "particle-ai/particle-1",
+              "input": 0.25,
+              "cachedInput": 0.03,
+              "cacheWrite": null,
+              "output": 1
+            }
+          }
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        },
+        {
+          "pointer": "/runtimeResolution/@lookup=qwen3-next-80b-a3b-thinking-2509",
+          "before": {
+            "exists": true,
+            "pricing": {
+              "modelId": "qwen/qwen3-next-80b-a3b-thinking",
+              "alias": "qwen/qwen3-next-80b-a3b-thinking-2509",
+              "input": 0.15,
+              "cachedInput": 0.015,
+              "cacheWrite": null,
+              "output": 1.2
+            }
+          },
+          "after": null
+        }
       ],
       "reviewRequired": [
         "compatibility-contraction-and-scope",
         "efforts-and-limits",
         "human-review-required",
-        "lifecycle-retirement-replacement",
         "pricing-including-decreases-and-expiry",
         "source-or-record-disappearance-not-proof-of-retirement"
       ],
       "addedModels": [
-        "openai/gpt-6.1-terra",
-        "openai/gpt-6.1-terra-pro",
-        "openai/gpt-6.1-terra-pro:batch",
-        "openai/gpt-6.1-terra:batch",
-        "prism-ml/ternary-bonsai-2-9b"
+        "particle-ai/particle-1"
       ],
       "removedModels": [
-        "ibm-granite/granite-4.0-h-micro",
-        "mistralai/codestral-2508:batch",
-        "mistralai/ministral-8b-2512:batch",
-        "mistralai/mistral-large-2512:batch",
-        "mistralai/mistral-medium-3.1:batch",
-        "mistralai/mistral-small-2603:batch",
-        "nvidia/nemotron-3-super-120b-a12b:free"
+        "openai/gpt-4-turbo",
+        "openai/o1",
+        "openai/o1-pro",
+        "openai/o3-mini",
+        "openai/o3-mini-high",
+        "openai/o4-mini",
+        "openai/o4-mini-high",
+        "qwen/qwen3-next-80b-a3b-thinking"
       ],
       "previousProvenance": null,
       "proposal": {
@@ -2063,18 +4458,18 @@
       "changes": [
         {
           "pointer": "/retrievedAt",
-          "before": "2026-10-26T14:35:30.099Z",
-          "after": "2026-10-28T12:53:16.953Z"
+          "before": "2026-10-28T12:53:16.953Z",
+          "after": "2026-10-29T12:53:38.465Z"
         },
         {
           "pointer": "/revision",
-          "before": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
-          "after": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901"
+          "before": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
+          "after": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e"
         },
         {
           "pointer": "/sha256",
-          "before": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
-          "after": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901"
+          "before": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
+          "after": "dc070c3731ad93ca28a98806d109fb01d972c8ec307086e463417b2c8a51b12e"
         }
       ],
       "reviewRequired": [
@@ -2084,9 +4479,9 @@
       "removedModels": [],
       "previousProvenance": {
         "source": "https://openrouter.ai/api/v1/models",
-        "revision": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
-        "retrievedAt": "2026-10-26T14:35:30.099Z",
-        "sha256": "96d842d661a684c7c19dc1009853f815a7cf4438625358092b13210e6860c51e",
+        "revision": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
+        "retrievedAt": "2026-10-28T12:53:16.953Z",
+        "sha256": "4a5584d966a03ad1235e83c1e8453cc4349e926fefab179a39b6151e0142a901",
         "license": "Model API does not declare a catalogue/model license; no license rights inferred."
       },
       "proposal": {
